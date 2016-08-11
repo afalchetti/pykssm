@@ -35,6 +35,7 @@
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import numpy as np
+import copy
 
 class SMC(object):
 	"Sequential Monte Carlo model."
@@ -49,7 +50,7 @@ class SMC(object):
 		Y_t     = h(X_t) + V_t.
 		
 		Args:
-			observations: output observations, as a numpy matrix.
+			observations: output observations, as a list of numpy vectors.
 			sprior: state prior stochastic model, as a function with no
 			        arguments which generates samples from the prior.
 			ftransition: state transition stochastic model, as a function
@@ -64,11 +65,23 @@ class SMC(object):
 		
 		self._ftransition = ftransition
 		self._hsensor     = hsensor
-		self._timelength  = 
+		self._timelength  = len(observations)
 		self._nsamples    = nsamples
 		self._usedsamples = 0
 		self._samples     = []
 		self._like        = -1.0
+	
+	@property
+	def ftransition(self):
+		return self._ftransition
+	
+	@ftransition.setter
+	def ftransition(self, ftransition):
+		self._ftransition = ftransition
+	
+	def clone(self):
+		"Deep clone of this particle filter."
+		return copy.deepcopy(self)
 	
 	def get_likelihood(self):
 		"Get the likelihood of the observations given the model."
@@ -102,6 +115,34 @@ class SMC(object):
 		
 		return sample
 	
+	def add_observation(self, observation):
+		"""Filter the current particles using the provided observation.
+		
+		Notes:
+			If no particles are available, they will be sampled from the prior
+			and the internal observations will be run first.
+			After running this method, the system is in a detached state and
+			will remain consistent untill all particles are drawn. After that
+			a new batch will be sampled which will not consider any additional
+			observations that may have been performed.
+		Returns:
+			The likelihood of the filter step p(y_t|y_{1:t}).
+		"""
+		
+		if self._usedsamples >= len(self._samples):
+			(self._samples, self._like) = self._getparticles()
+			self._usedsamples           = 0
+		
+		# particles are public using the draw() method, so
+		# the original ones should be preserved untouched
+		particles = copy.copy(self._particles)
+		weights   = copy.copy(self._weights)
+		
+		(self._particles, self._weights, like) =
+		    self._filter(particles, weights, observation)
+		
+		return like
+	
 	def _getparticles(self):
 		"""Get particles representing the state posterior distribution.
 		
@@ -119,15 +160,9 @@ class SMC(object):
 		likelihood         = 1.0
 		
 		for observation in observations:
-			particles = self._predict(particles)
-			weights   = self._measure(particles, weights, observation)
-			
-			# NOTE it is important that the predicted weights be normalized
-			#      so the sum after the measurement, sum(w * p(y_t|x_t)),
-			#      approximates int_x(p(y_t|x_t) * p(x_t|y_{1:t-1})) dx_t
-			likelihood *= np.sum(weights)
-			
-			particles, weights = self._resample(particles, weights)
+			(particles, weights, like) = self._filter(particles, weights, observation)
+			likelihood                *= like
+			particles, weights         = self._resample(particles, weights)
 		
 		return (particles, likelihood)
 	
@@ -197,6 +232,29 @@ class SMC(object):
 			rand           += invlen
 		
 		return (particles, newweights)
+		
+	def _filter(self, particles, weights, observation)
+		"""Particle filter step.
+		
+		Moves every particle according to the prediction function and
+		update their weights using the measurement funciton.
+		
+		Notes:
+			The arguments may be modified.
+		Returns:
+			Tuple (particles, weights, likelihood).
+			Updated particles with correspodning weights and the likelihood
+			of the filter step p(y_t|y_{1:t-1}).
+		"""
+		particles = self._predict(particles)
+		weights   = self._measure(particles, weights, observation)
+		
+		# NOTE it is important that the predicted weights be normalized
+		#      so the sum after the measurement, sum(w * p(y_t|x_t)),
+		#      approximates int_x(p(y_t|x_t) * p(x_t|y_{1:t-1})) dx_t
+		likelihood = np.sum(weights)
+		
+		return (particles, weights, likelihood)
 	
 	def _predict(self, particles):
 		"""Predict step of the filter.

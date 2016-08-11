@@ -70,6 +70,11 @@ class Kernel(object):
 		
 		raise NotImplementedError
 	
+	def mixture_eval(self, weights, components, point):
+		"Evaluate a kernel mixture at a given point."
+		
+		return sum(weights[i] * self(components[i], point) for i in range(len(weights)))
+	
 	def estimate_params(self, vectors):
 		"""Propose the kernel hilbert space parameters from sample vectors.
 		
@@ -87,7 +92,7 @@ class LinearKernel(Kernel):
 		
 		setparams = True
 		
-		super(LinearKernel, self).__init__(setparams)
+		super().__init__(setparams)
 	
 	def __call__(self, a, b):
 		""" Calculate the linear kernel product between two vectors a and b.
@@ -115,7 +120,7 @@ class LinearKernel(Kernel):
 			vectors: List of sample vectors in state-space.
 		"""
 		
-		super(GaussianKernel, self).estimate_params(vectors)
+		super().estimate_params(vectors)
 
 class GaussianKernel(Kernel):
 	"Gaussian kernel descriptor."
@@ -128,10 +133,18 @@ class GaussianKernel(Kernel):
 		"""
 		
 		setparams       = sigma is not None
-		self.sigma      = sigma
+		self._sigma     = sigma
 		self._invsigma2 = 1.0 / sigma**2
 		
 		super(GaussianKernel, self).__init__(setparams)
+	
+	@property
+	def sigma(self):
+		return self._sigma
+	
+	@sigma.setter
+	def ftransition(self, sigma):
+		self._sigma = sigma
 	
 	def __call__(self, a, b):
 		""" Calculate the gaussian kernel product between two vectors a and b.
@@ -148,7 +161,7 @@ class GaussianKernel(Kernel):
 	def deviation(self):
 		"Estimate a step size for MCMC given the parameters of the kernel"
 		
-		return self.sigma
+		return self._sigma
 		
 	def estimate_params(self, vectors):
 		"""Propose the width sigma for a gaussian kernel from sample vectors.
@@ -163,7 +176,7 @@ class GaussianKernel(Kernel):
 		            for i in range(len(observations))
 		            for k in range(len(observations)) if i < k]
 		
-		self.sigma      = np.std(diffs)
-		self._invsigma2 = 1.0 / self.sigma**2
+		self._sigma     = np.std(diffs)
+		self._invsigma2 = 1.0 / self._sigma**2
 		
-		super(GaussianKernel, self).estimate_params(vectors)
+		super().estimate_params(vectors)

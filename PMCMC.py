@@ -36,12 +36,12 @@
 
 import numpy as np
 
-class PMCMC(object):
+class PMCMC(MCMC):
 	"Particle Markov Chain Monte Carlo model."
 	
 	def __init__(self, observations, initial, prior, proposer,
 	             smcprior, ftransitioner, hsensor, nsamples,
-	             hastingsfactor = None):
+	             hfactor = None):
 		"""Construct a new Particle Markov Chain Monte Carlo model.
 		
 		Construct a new Particle Markov Chain Monte Carlo system for
@@ -62,81 +62,38 @@ class PMCMC(object):
 			          from the prior.
 			ftransitioner: generate the state transition stochastic model,
 			               as a function that takes x_t and returns x_{t+1},
-			               from the sample vector.
+			               from the sample vector, fter(s) -> f(x_t) -> x_{t+1}.
 			hsensor: sensor stochastic model, as a function that takes
 			         x_t and y_t and returns a value proportional to p(y_t|x_t).
 			nsamples (int): number of samples to draw each batch of the
 			                particle filter.
-			hastingsfactor: hastings factor which measures the asymmetry 
-			                of the proposal distribution following the formula
-			                q(x | x') / q (x' | x).
+			hfactor: hastings factor which measures the asymmetry 
+			         of the proposal distribution following the formula
+			         q(x | x') / q (x' | x).
 		"""
 		
 		if hastingsfactor is None:
 			hastingsfactor = PMCMC._unity_hastings
 		
-		self._observations = observations
-		self._sample       = initial
-		self._prior        = prior
-		self._proposer     = proposer
-		self._smcprior     = smcprior
-		self._hsensor      = hsensor
-		self._nsamples     = nsamples
-		self._slike        = self._get_likelihood(self._sample)
-	
-	def _unity_hastings(newsample, prevsample):
-		"""Symmetric hastings factor.
+		self._prior         = prior
+		self._smcprior      = smcprior
+		self._ftransitioner = ftransitioner
+		self._hsensor       = hsensor
 		
-		Hastings factor for any symmetric proposal distribution,
-		e.g. Gaussian, Exponential. Corresponds to
-		q(x | x') / q(x' | x)
-		and always equals 1.0.
-		
-		Returns:
-			Hastings factor for the proposal distribution.
-		"""
-		
-		return 1.0
+		super().__init__(observations, initial, proposer, likelihood,
+		                 nsamples, hastingsfactor)
 	
 	def _get_likelihood(self, sample):
 		"""Calculate the likelihood of a sample.
 		
 		To obtain the likelihood, create a particle filter and run it.
 		Additionally multiply the result by the prior on the sample.
+		
+		Returns:
+			Posterior density for the sample (or proportional to it).
 		"""
 		
 		pfilter = SMC(self._observations, self._smcprior,
-		              ftransitioner(sample), self._hsensor, self._nsamples)
+		              self._ftransitioner(sample), self._hsensor, self._nsamples)
 		
 		return self.prior(sample) * pfilter.get_likelihood()
-	
-	def draw(self):
-		"""Get a sample from the state posterior distribution.
-		
-		Propose a new sample from the proposal distribution and
-		either accept or reject it stochastically following the
-		Metropolis-Hastings algorithm: accept it with probability
-		min {1, p(x') q(x|x') / p(x) q(x'|x)},
-		where p() corresponds to the distribution in question and
-		q() to the proposal distribution.
-		
-		Returns:
-			Sample from the state posterior distribution.
-		"""
-		
-		accepted = False
-		
-		while not accepted:
-			proposal = self._proposer(self._sample)
-			like     = self._get_likelihood(proposal)
-			
-			ratio = like / self._slike * self._hastingsfactor(proposal, self._sample)
-			rand  = np.random_sample()
-			
-			if rand < min(1.0, ratio):
-				accepted = True
-		
-		self._sample = proposal
-		self._slike  = like
-		
-		return self._sample

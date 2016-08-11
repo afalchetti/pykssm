@@ -80,14 +80,12 @@ def offline(observations, hsensor, invhsensor, kernel = GaussianKernel(),
 	
 	if svectors is None:
 		svectors = _getsupportvectors(observations, invhsensor)
-		
-	ssize = len(svectors)
 	
 	if snoise is None:
 		if snstd is None:
-			snoise lambda s: np.zeros(ssize)
+			snoise lambda s: np.zeros(len(s))
 		else:
-			snoise = lambda s: np.randn(ssize)
+			snoise = lambda s: np.randn(len(s)) * snstd
 	if not kernel.complete_params:
 		kernel.estimate_params(svectors)
 	
@@ -96,9 +94,9 @@ def offline(observations, hsensor, invhsensor, kernel = GaussianKernel(),
 	sampler = PMCMC(observations[1:],  # the first observation was used for the SMC state prior
 	                initial       = np.array.zeros(ssize),
 	                prior         = lambda s: 1.0,
-	                proposer      = lambda s: s + kernel.dev.dot(np.randn(ssize)),
+	                proposer      = lambda s: s + kernel.dev * np.randn(len(s)),
 	                smcprior      = lambda s: firststate,
-	                ftransitioner = lambda a: lambda s: sum(a[i] * kernel(svectors[i], s) for i in range(len(a))),
+	                ftransitioner = lambda a: lambda s: sum(a[i] * kernel(svectors[i], s) for i in range(len(a)) + snoise(s)),
 	                hsensor       = hsensor,
 	                nsamples      = 400)
 	
@@ -200,8 +198,9 @@ def online(observations, hsensor, invhsensor, kernel = GaussianKernel(),
 	                         hsensor, invhsensor, kernel,
 	                         nsamples, snstd, snoise, svectors)]
 
-def online_stream(observations, hsensor, invhsensor, kernel = GaussianKernel(),
-                  nsamples = 400, snstd = 1.0, snoise = None, svectors = None):
+def online_stream(observations, hsensor, invhsensor, theta,
+                  kernel = GaussianKernel(), nsamples = 400,
+                  snstd = 1.0, snoise = None, svectors = None):
 	"""Estimate time-varying state transition from observation stream.
 	
 	Given a state-space model
@@ -220,6 +219,9 @@ def online_stream(observations, hsensor, invhsensor, kernel = GaussianKernel(),
 		         x and y and returns a value proportional to p(y|x).
 		invhsensor: inverse of the sensor function, h^-1(y); equivalently
 		            solves argmax_x(p(x|y)).
+		theta: (state transition function) transition function, as a
+		       function that takes f_t and f_{t+1} and calculates
+		       p(f_{t+1}|f_t)
 		kernel: Kernel object describing the domain of the estimation,
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
@@ -242,7 +244,51 @@ def online_stream(observations, hsensor, invhsensor, kernel = GaussianKernel(),
 		f_i(x) = sum(a_ik * Kernel(s_k, x)).
 	"""
 	
-	pass
+	observations = iter(observations)
+	threshold    = 1.0
+	firststate   = invhsensor(next(observations))
+	svectors     = [firststate]
+	
+	if snoise is None:
+		if snstd is None:
+			snoise lambda s: np.zeros(len(s))
+		else:
+			snoise = lambda s: np.randn(len(s)) * snstd
+	if not kernel.complete_params:
+		kernel.estimate_params(svectors)
+	
+	fgenerator      = lambda sv: lambda a: lambda s: kernel.mixture_eval(a, sv, s) + snoise(s)
+	proposer_new    = lambda sv: lambda s: s.concatenate(np.random_sample() * kernel.deviation() + 1.0)
+	proposer_static = lambda sv: lambda s: s + np.array([kernel(sv, s)]) * np.randn(len(s))
+	
+	theta_new    = lambda p, s: 1.0
+	theta_static = theta
+	
+	sampler = RecursivePMCMC(initial         = np.array.zeros(ssize),
+	                         prior           = lambda s: 1.0,
+	                         proposer        = proposer_new(svectors),
+	                         thetatransition = theta_new,
+	                         smcprior        = lambda s: firststate,
+	                         ftransitioner   = fgenerator(svectors),
+	                         hsensor         = hsensor,
+	                         nsamples        = 400)
+	
+	for observation in observations:
+		prevlen  = len(svectors)
+		svectors = _getsupportvectors_stream(observation, invhsensor,
+		                                     svectors, threshold)
+		
+		if prevlen < len(svectors):  # new support vector
+			sampler.thetatransition = theta_new
+			sampler.proposer        = proposer_new(svectors)
+			sampler.ftransitioner   = fgenerator(svectors)
+		else:  # no new support vector
+			sampler.thetatransition = theta_static
+			sampler.proposer        = proposer_static(svectors)
+		
+		samples = [sampler.draw() for i in range(nsamples)]
+		
+		yield (samples, svectors)
 
 def _getsupportvectors(observations, invhsensor):
 	"""Propose a set of support vectors for the state from observations y_{1:t}.
@@ -299,4 +345,3 @@ def _getsupportvectors_stream(observation, invhsensor, svectors, threshold):
 		svectors.append(proposal)
 	
 	return svectors
-
