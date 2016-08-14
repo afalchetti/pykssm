@@ -40,7 +40,7 @@ class MCMC(object):
 	"Markov Chain Monte Carlo model."
 	
 	def __init__(self, observations, initial, proposer,
-	             likelihood, nsamples, hfactor = None):
+	             likelihood, nsamples, hfactor=None):
 		"""Construct a new Markov Chain Monte Carlo model.
 		
 		Construct a new Markov Chain Monte Carlo system for
@@ -52,8 +52,8 @@ class MCMC(object):
 			initial: initial sample for the chain.
 			proposer: proposal function sampler; given the current sample
 			          as argument, propose a new sample.
-			likelihood: function proportional to the posterior distribution
-			            to be sampled.
+			likelihood: function that takes a sample and isproportional to
+			            the posterior distribution to be sampled.
 			nsamples (int): number of samples to draw each batch of the
 			                particle filter.
 			hfactor: hastings factor which measures the asymmetry 
@@ -62,7 +62,7 @@ class MCMC(object):
 		"""
 		
 		if hfactor is None:
-			hfactor = PMCMC._unity_hastings
+			hfactor = MCMC._unity_hastings
 		
 		self._observations = observations
 		self._sample       = initial
@@ -72,6 +72,12 @@ class MCMC(object):
 		self._nsamples     = nsamples
 		self._slike        = self._get_likelihood(self._sample)
 	
+	@staticmethod
+	def _uniform_likelihood(sample):
+		"Uniform likelihood function."
+		return 1.0
+	
+	@staticmethod
 	def _unity_hastings(newsample, prevsample):
 		"""Symmetric hastings factor.
 		
@@ -129,7 +135,7 @@ class MCMC(object):
 		like     = self._get_likelihood(proposal)
 		
 		ratio = like / self._slike * self._hastingsfactor(proposal, self._sample)
-		rand  = np.random_sample()
+		rand  = np.random.random_sample()
 		
 		if rand < min(1.0, ratio):
 			accepted = True

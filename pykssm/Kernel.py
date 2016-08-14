@@ -49,7 +49,7 @@ class Kernel(object):
 		
 		self._setparams = setparams
 	
-	def complete_params():
+	def complete_params(self):
 		"True if all parameters have been correctly set."
 		return self._setparams
 	
@@ -73,7 +73,7 @@ class Kernel(object):
 	def mixture_eval(self, weights, components, point):
 		"Evaluate a kernel mixture at a given point."
 		
-		return sum(weights[i] * self(components[i], point) for i in range(len(weights)))
+		return sum(weight * self(component, point) for (weight, component) in zip(weights, components))
 	
 	def estimate_params(self, vectors):
 		"""Propose the kernel hilbert space parameters from sample vectors.
@@ -125,7 +125,7 @@ class LinearKernel(Kernel):
 class GaussianKernel(Kernel):
 	"Gaussian kernel descriptor."
 	
-	def __init__(self, sigma = None):
+	def __init__(self, sigma=None):
 		"""Construct a new gaussian kernel descriptor.
 		
 		Args:
@@ -134,12 +134,13 @@ class GaussianKernel(Kernel):
 		
 		setparams       = sigma is not None
 		self._sigma     = sigma
-		self._invsigma2 = 1.0 / sigma**2
+		self._invsigma2 = 1.0 / sigma**2 if sigma is not None else None
 		
-		super(GaussianKernel, self).__init__(setparams)
+		super().__init__(setparams)
 	
 	@property
 	def sigma(self):
+		"Kernel width."
 		return self._sigma
 	
 	@sigma.setter
@@ -156,7 +157,7 @@ class GaussianKernel(Kernel):
 			Gaussian kernel product K(a, b) = exp(-|a-b|^2/sigma).
 		"""
 		
-		return np.exp(-self._invsgima2 * np.linalg.norm(a - b)**2)
+		return np.exp(-self._invsigma2 * np.linalg.norm(a - b)**2)
 	
 	def deviation(self):
 		"Estimate a step size for MCMC given the parameters of the kernel"
@@ -172,9 +173,9 @@ class GaussianKernel(Kernel):
 			vectors: List of sample vectors in state-space.
 		"""
 	
-		diffs = [np.linalg.norm(observations[x] - observations[y])
-		            for i in range(len(observations))
-		            for k in range(len(observations)) if i < k]
+		diffs = [np.linalg.norm(vectors[i] - vectors[k])
+		            for i in range(len(vectors))
+		            for k in range(len(vectors)) if i < k]
 		
 		self._sigma     = np.std(diffs)
 		self._invsigma2 = 1.0 / self._sigma**2

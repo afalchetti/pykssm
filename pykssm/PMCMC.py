@@ -34,14 +34,15 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import numpy as np
+from .MCMC import MCMC
+from .SMC import SMC
 
 class PMCMC(MCMC):
 	"Particle Markov Chain Monte Carlo model."
 	
 	def __init__(self, observations, initial, prior, proposer,
 	             smcprior, ftransitioner, hsensor, nsamples,
-	             hfactor = None):
+	             hfactor=None):
 		"""Construct a new Particle Markov Chain Monte Carlo model.
 		
 		Construct a new Particle Markov Chain Monte Carlo system for
@@ -72,16 +73,13 @@ class PMCMC(MCMC):
 			         q(x | x') / q (x' | x).
 		"""
 		
-		if hastingsfactor is None:
-			hastingsfactor = PMCMC._unity_hastings
-		
 		self._prior         = prior
 		self._smcprior      = smcprior
 		self._ftransitioner = ftransitioner
 		self._hsensor       = hsensor
 		
-		super().__init__(observations, initial, proposer, likelihood,
-		                 nsamples, hastingsfactor)
+		super().__init__(observations=observations, initial=initial, proposer=proposer,
+		                 likelihood=MCMC._uniform_likelihood, nsamples=nsamples, hfactor=hfactor)
 	
 	def _get_likelihood(self, sample):
 		"""Calculate the likelihood of a sample.
@@ -96,4 +94,4 @@ class PMCMC(MCMC):
 		pfilter = SMC(self._observations, self._smcprior,
 		              self._ftransitioner(sample), self._hsensor, self._nsamples)
 		
-		return self.prior(sample) * pfilter.get_likelihood()
+		return self._prior(sample) * pfilter.get_likelihood()

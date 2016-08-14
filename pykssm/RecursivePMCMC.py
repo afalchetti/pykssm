@@ -35,13 +35,16 @@
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import numpy as np
+from .MCMC import MCMC
+from .SMC import SMC
+import inspect
 
 class RecursivePMCMC(MCMC):
 	"Recursive Particle Markov Chain Monte Carlo model."
 	
 	def __init__(self, initial, prior, proposer, thetatransition,
 	             smcprior, ftransitioner, hsensor, nsamples,
-	             hfactor = None):
+	             hfactor=None):
 		"""Construct a new Recursive Particle Markov Chain Monte Carlo model.
 		
 		Construct a new Recursive Particle Markov Chain Monte Carlo system for
@@ -81,47 +84,55 @@ class RecursivePMCMC(MCMC):
 			in the internal particle filter (in the same time).
 		"""
 		
-		if hastingsfactor is None:
-			hastingsfactor = PMCMC._unity_hastings
-		
+		self._observation     = float("nan")
 		self._prior           = prior
 		self._thetatransition = thetatransition
 		self._smcprior        = smcprior
 		self._ftransitioner   = ftransitioner
 		self._hsensor         = hsensor
 		
-		super().__init__([], initial, prior, proposer, likelihood,
-		                 nsamples, hastingsfactor)
+		dummyfilter       = SMC([], smcprior, ftransitioner(initial), hsensor, nsamples)
+		self._samples     = [initial]
+		self._prevsamples = [initial]
+		self._filters     = [dummyfilter]
+		self._prevfilters = [dummyfilter]
 		
-		dummy             = self._ftransition(initial)
-		self._samples     = []
-		self._prevsamples = []
-		self._filters     = []
-		self._prevfilters = [SMC([], self._smcprior, dummy,
-		                         self._hsensor, self._nsamples)]
+		super().__init__(observations=[], initial=(initial, dummyfilter), proposer=proposer,
+		                 likelihood=MCMC._uniform_likelihood, nsamples=nsamples, hfactor=hfactor)
 	
 	@property
 	def proposer(self):
+		"""Proposal function sampler; given the current sample
+		as argument, propose a new sample."""
+		
 		return self._proposer
 	
 	@proposer.setter
-	def ftransition(self, proposer):
+	def proposer(self, proposer):
 		self._proposer = proposer
 	
 	@property
 	def thetatransition(self):
+		"""Sample transition stochastic model,
+		as a function that takes f_t and f_{t+1} and
+		calculates the likelihood of the transition."""
+		
 		return self._thetatransition
 	
 	@thetatransition.setter
-	def ftransition(self, thetatransition):
+	def thetatransition(self, thetatransition):
 		self._thetatransition = thetatransition
 	
 	@property
 	def ftransitioner(self):
+		"""Generate the state transition stochastic model,
+		as a function that takes x_t and returns x_{t+1},
+		from the sample vector, fter(s) -> f(x_t) -> x_{t+1}."""
+		
 		return self._ftransitioner
 	
 	@ftransitioner.setter
-	def ftransition(self, ftransitioner):
+	def ftransitioner(self, ftransitioner):
 		self._ftransitioner = ftransitioner
 	
 	def _add_observation(self, observation):
@@ -136,6 +147,11 @@ class RecursivePMCMC(MCMC):
 		self._samples     = []
 		self._filters     = []
 		self._observation = observation
+		
+		# generate a new sample and immediately accept it;
+		# samples should only be compared inside the same time step
+		self._sample = self._propose(self._sample)
+		self._like   = self._get_likelihood(self._sample)
 	
 	def _propose(self, sample):
 		"""Propose a new sample given the current one.
@@ -144,9 +160,9 @@ class RecursivePMCMC(MCMC):
 			New sample.
 		"""
 		
-		index  = int(np.random_sample() * len(self._prevsamples))
+		index  = int(np.random.random_sample() * len(self._prevsamples))
 		prev   = self._prevsamples[index]
-		filter = self._prevfilter[index].clone()
+		filter = self._prevfilters[index].clone()
 		
 		proposal           = self._proposer(prev)
 		filter.ftransition = self._ftransitioner(proposal)
@@ -167,7 +183,7 @@ class RecursivePMCMC(MCMC):
 		filter = sampleinfo[1]
 		
 		like        = filter.add_observation(self._observation)
-		ptransition = np.sum(thetatransition(prev, sample)
+		ptransition = np.sum(self._thetatransition(prev, sample)
 		                         for prev in self._prevsamples)
 		
 		return ptransition * like
@@ -176,13 +192,13 @@ class RecursivePMCMC(MCMC):
 		"Hastings factor, corresponding to q(prev | sample) / q(sample | prev)."
 		
 		# TODO correct this, since q(x | x') = q(x) and this depends on all
-		# the preivous samples, it is a large sum (hopefully it shouldn't matter too much
+		# the previous samples, it is a large sum (hopefully it shouldn't matter too much
 		# in the sense that something reasonable should be output as is,
 		# even if very very skewed)
 		
 		return self._hfactor(sample[0], previous[0])
 	
-	def _draw(self):
+	def draw(self):
 		"""Get a sample from the state posterior distribution.
 		
 		Propose a new sample from the proposal distribution and

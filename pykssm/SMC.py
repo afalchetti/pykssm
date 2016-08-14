@@ -34,13 +34,13 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import numpy as np
 import copy
+import numpy as np
 
 class SMC(object):
 	"Sequential Monte Carlo model."
 	
-	def __init__(self, observations, sprior, ftransition,
+	def __init__(self, observations, prior, ftransition,
 	             hsensor, nsamples):
 		"""Construct a new Sequential Monte Carlo model.
 		
@@ -51,8 +51,8 @@ class SMC(object):
 		
 		Args:
 			observations: output observations, as a list of numpy vectors.
-			sprior: state prior stochastic model, as a function with no
-			        arguments which generates samples from the prior.
+			prior: state prior stochastic model, as a function with no
+			       arguments which generates samples from the prior.
 			ftransition: state transition stochastic model, as a function
 			             that takes x_t and returns x_{t+1}.
 			hsensor: sensor stochastic model, as a function that takes
@@ -61,18 +61,25 @@ class SMC(object):
 		"""
 		
 		if nsamples < 1:
-			raise ValueException("At least one particle is needed.")
+			raise ValueError("At least one particle is needed.")
 		
-		self._ftransition = ftransition
-		self._hsensor     = hsensor
-		self._timelength  = len(observations)
-		self._nsamples    = nsamples
-		self._usedsamples = 0
-		self._samples     = []
-		self._like        = -1.0
+		self._observations = observations
+		self._prior        = prior
+		self._ftransition  = ftransition
+		self._hsensor      = hsensor
+		self._timelength   = len(observations)
+		self._nsamples     = nsamples
+		self._usedsamples  = 0
+		self._particles    = []
+		self._weights      = []
+		self._samples      = []
+		self._like         = -1.0
 	
 	@property
 	def ftransition(self):
+		"""State transition stochastic model, as a function
+		that takes x_t and returns x_{t+1}."""
+		
 		return self._ftransition
 	
 	@ftransition.setter
@@ -85,6 +92,7 @@ class SMC(object):
 	
 	def get_likelihood(self):
 		"Get the likelihood of the observations given the model."
+		
 		if self._like < 0.0:
 			(self._samples, self._like) = self._getparticles()
 			self._usedsamples           = 0
@@ -138,8 +146,8 @@ class SMC(object):
 		particles = copy.copy(self._particles)
 		weights   = copy.copy(self._weights)
 		
-		(self._particles, self._weights, like) =
-		    self._filter(particles, weights, observation)
+		(self._particles, self._weights, like) = (
+		    self._filter(particles, weights, observation))
 		
 		return like
 	
@@ -159,7 +167,7 @@ class SMC(object):
 		particles, weights = self._particlesfromprior()
 		likelihood         = 1.0
 		
-		for observation in observations:
+		for observation in self._observations:
 			(particles, weights, like) = self._filter(particles, weights, observation)
 			likelihood                *= like
 			particles, weights         = self._resample(particles, weights)
@@ -179,16 +187,13 @@ class SMC(object):
 		"""
 		
 		invlen    = 1.0 / self._nsamples
-		particles = []
-		weights   = []
-		
-		for i in range(self._nsamples):
-			particles.append(self._prior())
-			weights.append(invlen)
+		particles = [self._prior() for i in range(self._nsamples)]
+		weights   = [invlen] * self._nsamples
 		
 		return (particles, weights)
 	
-	def _resample(self, particles, weights):
+	@staticmethod
+	def _resample(particles, weights):
 		"""Sample a new set of particles with equal weights.
 		
 		As the filtering moves along, some particles get stuck representing
@@ -218,22 +223,25 @@ class SMC(object):
 			Updated particles.
 		"""
 		
-		invlen     = 1.0 / len(weights)
-		newweights = np.normalize(weights)
-		rand       = np.random_sample() * invlen
+		n = len(weights)
+		
+		invlen       = 1.0 / n
+		newparticles = [None for i in range(n)]
+		newweights   = _normalize(weights)
+		rand         = np.random.random_sample() * invlen
 		
 		k = 0
-		for i in range(len(weights)):
-			while rand >= 0 and k < len(weights):
+		for i in range(n):
+			while rand >= 0 and k < n:
 				rand -= weights[k]
-			
+				k    += 1
 			newparticles[i] = particles[k - 1]
 			newweights  [i] = invlen
 			rand           += invlen
 		
 		return (particles, newweights)
-		
-	def _filter(self, particles, weights, observation)
+	
+	def _filter(self, particles, weights, observation):
 		"""Particle filter step.
 		
 		Moves every particle according to the prediction function and
@@ -246,6 +254,7 @@ class SMC(object):
 			Updated particles with correspodning weights and the likelihood
 			of the filter step p(y_t|y_{1:t-1}).
 		"""
+		
 		particles = self._predict(particles)
 		weights   = self._measure(particles, weights, observation)
 		
@@ -268,8 +277,7 @@ class SMC(object):
 			Updated particles.
 		"""
 		
-		for i in range(len(particles)):
-			particles[i] = self._ftransition(particles[i])
+		particles[:] = [self._ftransition(particle) for particle in particles]
 		
 		return particles
 	
@@ -290,7 +298,14 @@ class SMC(object):
 			Updated particles.
 		"""
 		
-		for i in range(len(weights)):
-			weights[i] *= self._hsensor(particles[i][-1], measurement)
+		weights[:] = [weight * self._hsensor(particle, measurement)
+		                 for (weight, particle) in zip(weights, particles)]
 		
 		return weights
+
+def _normalize(vector):
+	"Get a normalized version of a vector whose components sum to one."
+	
+	total = np.sum(vector)
+	
+	return vector / total if total != 0.0 else vector
