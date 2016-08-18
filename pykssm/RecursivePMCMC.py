@@ -42,9 +42,9 @@ import inspect
 class RecursivePMCMC(MCMC):
 	"Recursive Particle Markov Chain Monte Carlo model."
 	
-	def __init__(self, initial, prior, proposer, thetatransition,
-	             smcprior, ftransitioner, hsensor, nsamples,
-	             hfactor=None):
+	def __init__(self, initial, prior, proposer, proppdf,
+	             thetatransition, smcprior, ftransitioner,
+	             hsensor, firstobservation, nsamples):
 		"""Construct a new Recursive Particle Markov Chain Monte Carlo model.
 		
 		Construct a new Recursive Particle Markov Chain Monte Carlo system for
@@ -60,23 +60,28 @@ class RecursivePMCMC(MCMC):
 			prior: prior model for the sampled variable, as a function
 			       which takes a sample as argument and returns its probability.
 			proposer: proposal function sampler; given the current sample
-			          as argument, propose a new sample.
+			          and a context as arguments, propose a new sample.
+			proppdf: conditional probability density function (or proportional)
+			         for the proposal distribution q(x_t | x_{t-1}) as a
+			         function that takes x_{t-1}, x_t and a context and outputs
+			         the corresponding probability.
 			thetatransition: sample transition stochastic model,
-			                 as a function that takes f_t and f_{t+1} and
-			                 calculates the likelihood of the transition.
+			                 as a function that takes f_t, f_{t+1} and
+			                 a context and calculates the likelihood of
+			                 the transition.
 			smcprior: state prior stochastic model for the particle filter,
 			          as a function with no arguments which generates samples
 			          from the prior.
 			ftransitioner: generate the state transition stochastic model,
 			               as a function that takes x_t and returns x_{t+1},
-			               from the sample vector, fter(s) -> f(x_t) -> x_{t+1}.
+			               from the sample vector and a context,
+			               fter(s, ctx) -> f(x_t) -> x_{t+1}.
 			hsensor: sensor stochastic model, as a function that takes
 			         x_t and y_t and returns a value proportional to p(y_t|x_t).
+			firstobservation: initial observation, which doesn't depend on the 
+			                  transition function, only on the sensor model.
 			nsamples (int): number of samples to draw each batch of the
 			                particle filter.
-			hfactor: hastings factor which measures the asymmetry 
-			         of the proposal distribution following the formula
-			         q(x | x') / q (x' | x).
 		Notes:
 			The difference between thetatransition and ftransitioner is that
 			the first models the transition between the sampled variable
@@ -84,58 +89,46 @@ class RecursivePMCMC(MCMC):
 			in the internal particle filter (in the same time).
 		"""
 		
-		self._observation     = float("nan")
+		self._observation     = firstobservation
 		self._prior           = prior
 		self._thetatransition = thetatransition
 		self._smcprior        = smcprior
 		self._ftransitioner   = ftransitioner
 		self._hsensor         = hsensor
+		self._nsamples        = nsamples
+		self._proppdf         = proppdf
+		self._context         = None
 		
-		dummyfilter       = SMC([], smcprior, ftransitioner(initial), hsensor, nsamples)
+		dummytransition = lambda x: x
+		initfilter      = SMC([self._observation], smcprior,
+		                      dummytransition,
+		                      hsensor, nsamples)
 		self._samples     = [initial]
-		self._prevsamples = [initial]
-		self._filters     = [dummyfilter]
-		self._prevfilters = [dummyfilter]
+		self._prevsamples = []
+		self._filters     = [initfilter]
+		self._prevfilters = []
 		
-		super().__init__(observations=[], initial=(initial, dummyfilter), proposer=proposer,
-		                 likelihood=MCMC._uniform_likelihood, nsamples=nsamples, hfactor=hfactor)
+		initfilter.get_likelihood()
+		
+		super().__init__(observations=[self._observation],
+		                 initial=(initial, initfilter), proposer=proposer,
+		                 likelihood=MCMC._uniform_likelihood, hfactor=None)
 	
 	@property
-	def proposer(self):
-		"""Proposal function sampler; given the current sample
-		as argument, propose a new sample."""
+	def context(self):
+		"""Get the sampling context.
 		
-		return self._proposer
-	
-	@proposer.setter
-	def proposer(self, proposer):
-		self._proposer = proposer
-	
-	@property
-	def thetatransition(self):
-		"""Sample transition stochastic model,
-		as a function that takes f_t and f_{t+1} and
-		calculates the likelihood of the transition."""
+		Additional information that may be used in proposals,
+		theta transitions and state transitions.
+		"""
 		
-		return self._thetatransition
+		return self._context
 	
-	@thetatransition.setter
-	def thetatransition(self, thetatransition):
-		self._thetatransition = thetatransition
+	@context.setter
+	def context(self, context):
+		self._context = context
 	
-	@property
-	def ftransitioner(self):
-		"""Generate the state transition stochastic model,
-		as a function that takes x_t and returns x_{t+1},
-		from the sample vector, fter(s) -> f(x_t) -> x_{t+1}."""
-		
-		return self._ftransitioner
-	
-	@ftransitioner.setter
-	def ftransitioner(self, ftransitioner):
-		self._ftransitioner = ftransitioner
-	
-	def _add_observation(self, observation):
+	def add_observation(self, observation):
 		"""Start another time step using the given observation.
 		
 		All the gathered samples from this time step will be used
@@ -164,8 +157,8 @@ class RecursivePMCMC(MCMC):
 		prev   = self._prevsamples[index]
 		filter = self._prevfilters[index].clone()
 		
-		proposal           = self._proposer(prev)
-		filter.ftransition = self._ftransitioner(proposal)
+		proposal           = self._proposer(prev, self._context)
+		filter.ftransition = self._ftransitioner(proposal, self._context)
 		
 		return (proposal, filter)
 	
@@ -183,7 +176,7 @@ class RecursivePMCMC(MCMC):
 		filter = sampleinfo[1]
 		
 		like        = filter.add_observation(self._observation)
-		ptransition = np.sum(self._thetatransition(prev, sample)
+		ptransition = np.sum(self._thetatransition(prev, sample, self._context)
 		                         for prev in self._prevsamples)
 		
 		return ptransition * like
@@ -191,12 +184,24 @@ class RecursivePMCMC(MCMC):
 	def _hastingsfactor(self, sample, previous):
 		"Hastings factor, corresponding to q(prev | sample) / q(sample | prev)."
 		
-		# TODO correct this, since q(x | x') = q(x) and this depends on all
-		# the previous samples, it is a large sum (hopefully it shouldn't matter too much
-		# in the sense that something reasonable should be output as is,
-		# even if very very skewed)
+		# In this class, the proposal is independent from the previous sample,
+		# i.e.  q(x' | x) = q(x') = p (x' | x_{t-1}^r),
+		# where x_{t-1}^r is a randomly selected previous particle, r ~ uniform.
+		# Therefore,
+		# q(x' | x) = sum(p(x'|x_{t-1}^r, r = i) p(r = i))
+		#           = 1/N * sum(p(x' | x_{t-1}^i));
+		# the constant cancels on the division.
 		
-		return self._hfactor(sample[0], previous[0])
+		sample   = sample  [0]
+		previous = previous[0]
+		
+		top    = np.sum(self._proppdf(prev, previous, self._context)
+		                    for prev in self._prevsamples)
+		
+		bottom = np.sum(self._proppdf(prev, sample, self._context)
+		                    for prev in self._prevsamples)
+		
+		return top / bottom
 	
 	def draw(self):
 		"""Get a sample from the state posterior distribution.

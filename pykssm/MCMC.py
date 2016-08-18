@@ -40,7 +40,7 @@ class MCMC(object):
 	"Markov Chain Monte Carlo model."
 	
 	def __init__(self, observations, initial, proposer,
-	             likelihood, nsamples, hfactor=None):
+	             likelihood, hfactor=None):
 		"""Construct a new Markov Chain Monte Carlo model.
 		
 		Construct a new Markov Chain Monte Carlo system for
@@ -54,8 +54,6 @@ class MCMC(object):
 			          as argument, propose a new sample.
 			likelihood: function that takes a sample and isproportional to
 			            the posterior distribution to be sampled.
-			nsamples (int): number of samples to draw each batch of the
-			                particle filter.
 			hfactor: hastings factor which measures the asymmetry 
 			         of the proposal distribution following the formula
 			         q(x | x') / q (x' | x).
@@ -69,8 +67,15 @@ class MCMC(object):
 		self._proposer     = proposer
 		self._likelihood   = likelihood
 		self._hfactor      = hfactor
-		self._nsamples     = nsamples
+		self._accepted     = 1
+		self._total        = 1
 		self._slike        = self._get_likelihood(self._sample)
+	
+	@property
+	def ratio(self):
+		"Accepted ratio."
+		
+		return self._accepted / self._total
 	
 	@staticmethod
 	def _uniform_likelihood(sample):
@@ -134,14 +139,27 @@ class MCMC(object):
 		proposal = self._propose(self._sample)
 		like     = self._get_likelihood(proposal)
 		
-		ratio = like / self._slike * self._hastingsfactor(proposal, self._sample)
+		if self._slike > 0:
+			ratio = like / self._slike * self._hastingsfactor(proposal, self._sample)
+		else:
+			ratio = 1
 		rand  = np.random.random_sample()
 		
 		if rand < min(1.0, ratio):
 			accepted = True
 		
+		#print("hf:", self._hastingsfactor(proposal, self._sample))
+		#print("like:", like)
+		#print("prevlike:", self._slike)
+		
 		if accepted:
-			self._sample = proposal
-			self._slike  = like
+			self._sample    = proposal
+			self._slike     = like
+			self._accepted += 1
+		
+		self._total += 1
+		
+		#acceptstr = "accepted" if accepted else "rejected"
+		#print(acceptstr, "| like:", like, "| ratio:", ratio, "| sample:", proposal[0], "| R:", self.ratio)
 		
 		return self._sample

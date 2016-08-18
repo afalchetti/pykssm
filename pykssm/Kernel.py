@@ -54,7 +54,7 @@ class Kernel(object):
 		return self._setparams
 	
 	def __call__(self, a, b):
-		""" Calculate the kernel product between two vectors a and b.
+		"""Calculate the kernel product between two vectors a and b.
 		
 		Args:
 			a: first vector.
@@ -64,6 +64,26 @@ class Kernel(object):
 		"""
 		
 		raise NotImplementedError
+	
+	def gram(self, A, B):
+		"""Calculate the grammian matrix K(A, B).
+		
+		The grammian matrix consists of entries K_ij = k(A_i, B_j).
+		
+		Args:
+			A: First list of vectors.
+			B: Second list of vectors.
+		Returns:
+			Grammian matrix.
+		"""
+		
+		matrix = np.zeros((len(A), len(B)))
+		
+		for (i, ai) in enumerate(A):
+			for (k, bk) in enumerate(B):
+				matrix[i, k] = self(ai, bk)
+		
+		return matrix
 	
 	def deviation(self):
 		"Estimate a step size for MCMC given the parameters of the kernel"

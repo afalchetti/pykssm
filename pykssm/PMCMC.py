@@ -77,9 +77,11 @@ class PMCMC(MCMC):
 		self._smcprior      = smcprior
 		self._ftransitioner = ftransitioner
 		self._hsensor       = hsensor
+		self._nsamples      = nsamples
 		
-		super().__init__(observations=observations, initial=initial, proposer=proposer,
-		                 likelihood=MCMC._uniform_likelihood, nsamples=nsamples, hfactor=hfactor)
+		super().__init__(observations=observations, initial=initial,
+		                 proposer=proposer, likelihood=MCMC._uniform_likelihood,
+		                 hfactor=hfactor)
 	
 	def _get_likelihood(self, sample):
 		"""Calculate the likelihood of a sample.

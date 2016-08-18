@@ -70,8 +70,6 @@ class SMC(object):
 		self._timelength   = len(observations)
 		self._nsamples     = nsamples
 		self._usedsamples  = 0
-		self._particles    = []
-		self._weights      = []
 		self._samples      = []
 		self._like         = -1.0
 	
@@ -143,11 +141,13 @@ class SMC(object):
 		
 		# particles are public using the draw() method, so
 		# the original ones should be preserved untouched
-		particles = copy.copy(self._particles)
-		weights   = copy.copy(self._weights)
+		particles = copy.copy(self._samples)
+		weights   = [1.0 / self._nsamples] * self._nsamples
 		
-		(self._particles, self._weights, like) = (
+		(particles, weights, like) = (
 		    self._filter(particles, weights, observation))
+		
+		(self._samples, weights) = self._resample(particles, weights)
 		
 		return like
 	
@@ -165,14 +165,23 @@ class SMC(object):
 		"""
 		
 		particles, weights = self._particlesfromprior()
-		likelihood         = 1.0
+		loglikelihood      = 0.0
 		
-		for observation in self._observations:
+		observations = iter(self._observations)
+		
+		# first observation comes right from x0
+		# (i.e. the prior), no predict step
+		weights            = self._measure(particles, weights, next(observations))
+		like               = np.sum(weights)
+		loglikelihood     += np.log(like)
+		particles, weights = self._resample(particles, weights)
+		
+		for observation in observations:
 			(particles, weights, like) = self._filter(particles, weights, observation)
-			likelihood                *= like
+			loglikelihood             += np.log(like)
 			particles, weights         = self._resample(particles, weights)
 		
-		return (particles, likelihood)
+		return (particles, np.exp(loglikelihood))
 	
 	def _particlesfromprior(self):
 		"""Get particles from the prior state model.
