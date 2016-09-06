@@ -77,7 +77,7 @@ class Kernel(object):
 			Grammian matrix.
 		"""
 		
-		matrix = np.zeros((len(A), len(B)))
+		matrix = np.empty((len(A), len(B)))
 		
 		for (i, ai) in enumerate(A):
 			for (k, bk) in enumerate(B):
@@ -93,7 +93,8 @@ class Kernel(object):
 	def mixture_eval(self, weights, components, point):
 		"Evaluate a kernel mixture at a given point."
 		
-		return sum(weight * self(component, point) for (weight, component) in zip(weights, components))
+		evals = np.fromiter((self(component, point) for component in components), dtype=np.float, count=len(components))
+		return weights.dot(evals)
 	
 	def estimate_params(self, vectors):
 		"""Propose the kernel hilbert space parameters from sample vectors.
@@ -152,9 +153,9 @@ class GaussianKernel(Kernel):
 			sigma: kernel width.
 		"""
 		
-		setparams       = sigma is not None
-		self._sigma     = sigma
-		self._invsigma2 = 1.0 / sigma**2 if sigma is not None else None
+		setparams        = sigma is not None
+		self._sigma      = sigma
+		self._ninvsigma2 = -1.0 / sigma**2 if sigma is not None else None
 		
 		super().__init__(setparams)
 	
@@ -177,7 +178,9 @@ class GaussianKernel(Kernel):
 			Gaussian kernel product K(a, b) = exp(-|a-b|^2/sigma).
 		"""
 		
-		return np.exp(-self._invsigma2 * np.linalg.norm(a - b)**2)
+		delta = a - b
+		
+		return np.exp(self._ninvsigma2 * np.dot(delta, delta))
 	
 	def deviation(self):
 		"Estimate a step size for MCMC given the parameters of the kernel"
@@ -192,12 +195,14 @@ class GaussianKernel(Kernel):
 		Args:
 			vectors: List of sample vectors in state-space.
 		"""
-	
-		diffs = [np.linalg.norm(vectors[i] - vectors[k])
-		            for i in range(len(vectors))
-		            for k in range(len(vectors)) if i < k]
 		
-		self._sigma     = np.std(diffs)
-		self._invsigma2 = 1.0 / self._sigma**2
+		subset = vectors[0:40]
+	
+		diffs = [np.sqrt(np.dot(subset[i] - subset[k], subset[i] - subset[k]))
+		            for i in range(len(subset))
+		            for k in range(i + 1, len(subset))]
+		
+		self._sigma      = np.std(diffs)
+		self._ninvsigma2 = -1.0 / self._sigma**2
 		
 		super().estimate_params(vectors)

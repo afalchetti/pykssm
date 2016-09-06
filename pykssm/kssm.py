@@ -40,9 +40,9 @@ from .PMCMC import PMCMC
 from .RecursivePMCMC import RecursivePMCMC
 from .Kernel import GaussianKernel
 
-def offline(observations, hsensor, invhsensor, kernel=GaussianKernel(),
-            smcprior=None, nsamples=400, snstd=1.0, snoise=None,
-            svectors=None, verbose=False):
+def offline(observations, hsensor, invhsensor=None, kernel=GaussianKernel(),
+            smcprior=None, nsamples=400, sigmax=1.0, sigmay=1.0,
+            xnoise=None, ynoise=None, svectors=None, verbose=False):
 	"""Estimate state transition from observation matrix.
 	
 	Given a state-space model
@@ -58,25 +58,34 @@ def offline(observations, hsensor, invhsensor, kernel=GaussianKernel(),
 		observations: matrix of observations, each row is an observation,
 		              as a numpy array.
 		hsensor: sensor stochastic model, as a function that takes
-		         x and y and returns a value proportional to p(y|x).
+		         x and returns a noiseless y, y = h(x).
 		invhsensor: inverse of the sensor function, h^-1(y); equivalently
-		            solves argmax_x(p(x|y)).
+		            solves argmax_x(p(x|y)). If not specified, it will be
+		            solved using scipy's solve system.
 		kernel: Kernel object describing the domain of the estimation,
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
 		smcprior: state prior for the internal particle filter;
 		          if None, use a appropriately sized deterministic zero vector.
 		nsamples: number of samples to draw from the MCMC process.
-		snstd: if snoise is None, additive white gaussian noise will be
-		       used with this standard deviation. If both arguments are
-		       None, the process will present no noise. 
-		snoise: state transition known additive noise process W_t, as
+		sigmax: if xnoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		sigmay: if ynoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		xnoise: state transition known additive noise process W_t, as
 		        a function of the state.
+		ynoise: sensor known additive noise process W_t, as a function of
+		        the reference measurement and the measurement, P(y|y0),
+		        where the reference y0 corresponds to the noiseless operation
+		        on the known state, y0 = h(x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
 		verbose: if true, log every time a sample is drawn.
 	Returns:
-		Tuple ([a_i], s, k) of mixing parameters, support vectors and kernel.
+		Tuple ([a_i], [p_i], s, k) of mixing parameters, likelihoods, support
+		vectors and kernel.
 		The kernel defines the form of each component, with all
 		the required parameters set.
 		The list of support vectors s contains the components that span
@@ -86,46 +95,87 @@ def offline(observations, hsensor, invhsensor, kernel=GaussianKernel(),
 		state transition function f() where each a_i corresponds to
 		the mixing parameters describing a function of the form
 		f_i(x) = sum(a_ik * Kernel(s_k, x)).
+		For each sample, its corresponding likelihood is also saved.
 	"""
+	
+	if invhsensor is None:
+		invhsensor = lambda y: scipy.optimize.solve(lambda x: hsensor(x) - y, y)
+	
+	firststate = invhsensor(observations[0])
+	xsize      = len(firststate)
+	ysize      = len(observations[0])
 	
 	if svectors is None:
 		(svectors, kernel) = _getsupportvectors(observations, invhsensor, kernel)
 	
-	if snoise is None:
-		if snstd is None:
-			snoise = lambda s: np.zeros(len(s))
+	vsize = len(svectors)
+	
+	if xnoise is None:
+		if sigmax is None:
+			xnoise = lambda s: np.zeros(xsize)
 		else:
-			snoise = lambda s: np.random.randn(len(s)) * snstd
+			xnoise = lambda s: np.dot(sigmax, np.random.randn(xsize))
+	
+	if ynoise is None:
+		if sigmay is None:
+			psensor = lambda x0, y: 1.0 if np.abs(hsensor(x0) - y) < 1e-10 else 0.0
+		else:
+			if np.isscalar(sigmay):
+				sigmay = np.array([[sigmay]])
+			
+			cov        = sigmay.dot(sigmay.T)
+			coeff      = 1.0 / np.sqrt((2.0 * np.pi)**ysize * _pdet(cov))
+			infomatrix = np.linalg.pinv(cov)
+			expcoeff   = -0.5 * infomatrix
+			
+			def gnoise(x0, y):
+				dy = hsensor(x0) - y
+				return coeff * np.exp(np.dot(dy, np.dot(expcoeff, dy)))
+			
+			psensor = gnoise
+	else:
+		psensor = lambda x, y: ynoise(hsensor(x), y)
+	
 	if not kernel.complete_params():
 		kernel.estimate_params(svectors)
-	
-	firststate = invhsensor(observations[0])
-	ssize      = len(firststate)
 	
 	if smcprior is None:
 		smcprior = lambda: firststate
 	
+	pcovariance = 0.2**2 * np.exp(-0.2 * _diff2matrix(svectors, svectors))
+	
+	def proposer(sample):
+		prop = np.empty((xsize, vsize))
+		
+		for (i, row) in enumerate(sample):
+			prop[i, :] = np.random.multivariate_normal(row, pcovariance)
+		
+		return prop
+	
 	sampler = PMCMC(observations,
-	                initial       = np.zeros(len(svectors)),
+	                initial       = np.zeros((xsize, vsize)),
 	                prior         = lambda s: 1.0,
-	                proposer      = lambda s: np.random.multivariate_normal(s, 0.2**2 * np.exp(-0.2 * _diff2matrix(svectors, svectors))),
+	                proposer      = proposer,
 	                smcprior      = smcprior,
-	                ftransitioner = lambda a: lambda s: kernel.mixture_eval(a, svectors, s) + snoise(s),
-	                hsensor       = hsensor,
+	                ftransitioner = lambda a: lambda s: kernel.mixture_eval(a, svectors, s) + xnoise(s),
+	                hsensor       = psensor,
 	                nsamples      = 200)
 	
-	samples = []
+	samples     = np.empty((nsamples, xsize, vsize))
+	likelihoods = np.empty(nsamples)
 	
 	for i in range(nsamples):
 		if verbose:
 			print("sample", i + 1, "| ratio:", sampler.ratio)
-		samples.append(sampler.draw())
+		samples    [i, :, :] = sampler.draw()
+		likelihoods[i]       = sampler.likelihood
 	
-	return (samples, svectors, kernel)
+	return (samples, likelihoods, svectors, kernel)
 
-def offline_stream(observations, hsensor, invhsensor,
+def offline_stream(observations, hsensor, invhsensor=None,
                    kernel=GaussianKernel(), smcprior=None, nsamples=400,
-                   snstd=1.0, snoise=None, svectors=None, verbose=False):
+                   sigmax=1.0, sigmay=1.0, xnoise=None, ynoise=None,
+                   svectors=None, verbose=False):
 	"""Estimate state transition from observation stream.
 	
 	Given a state-space model
@@ -141,46 +191,57 @@ def offline_stream(observations, hsensor, invhsensor,
 		observations: generator of observations, each entry is an observation,
 		              as a numpy array.
 		hsensor: sensor stochastic model, as a function that takes
-		         x and y and returns a value proportional to p(y|x).
+		         x and returns a noiseless y, y = h(x).
 		invhsensor: inverse of the sensor function, h^-1(y); equivalently
-		            solves argmax_x(p(x|y)).
+		            solves argmax_x(p(x|y)). If not specified, it will be
+		            solved using scipy's solve system.
 		kernel: Kernel object describing the domain of the estimation,
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
 		smcprior: state prior for the internal particle filter;
 		          if None, use a appropriately sized deterministic zero vector.
 		nsamples: number of samples to draw from the MCMC process.
+		sigmax: if xnoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		sigmay: if ynoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		xnoise: state transition known additive noise process W_t, as
+		        a function of the state.
+		ynoise: sensor known additive noise process W_t, as a function of
+		        the reference measurement and the measurement, P(y|y0),
+		        where the reference y0 corresponds to the noiseless operation
+		        on the known state, y0 = h(x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
-		snstd: if snoise is None, additive white gaussian noise will be
-		       used with this standard deviation. If both arguments are
-		       None, the process will present no noise. 
-		snoise: state transition known additive noise process W_t, as
-		        a function of the state.
 		verbose: if true, log every time a sample is drawn.
 	Returns:
-		Tuple ([a_i], s, k) of mixing parameters, support vectors and kernel.
+		Tuple ([a_i], [p_i], s, k) of mixing parameters, likelihoods, support
+		vectors and kernel.
 		The kernel defines the form of each component, with all
 		the required parameters set.
 		The list of support vectors s contains the components that span
 		a subspace where the estimation occurs. Each s_i is parametrized
-		in the given KernelSpace.
+		in the given Kernel space.
 		The samples a_i represent the probability distribution of the
 		state transition function f() where each a_i corresponds to
 		the mixing parameters describing a function of the form
 		f_i(x) = sum(a_ik * Kernel(s_k, x)).
+		For each sample, its corresponding likelihood is also saved.
 	"""
 	
 	obsmatrix = [observation for observation in observations]
 	
 	return offline(observations=np.array(obsmatrix), hsensor=hsensor,
 	               invhsensor=invhsensor, kernel=kernel, nsamples=nsamples,
-	               snstd=snstd, snoise=snoise, svectors=svectors,
-	               verbose=verbose)
+	               sigmax=sigmax, sigmay=sigmay, xnoise=xnoise, ynoise=ynoise,
+	               svectors=svectors, verbose=verbose)
 
-def online(observations, hsensor, invhsensor, theta,
+def online(observations, hsensor, theta, invhsensor=None,
            kernel=GaussianKernel(), smcprior=None, nsamples=400,
-           snstd=1.0, snoise=None, svectors=None, verbose=False):
+           sigmax=1.0, sigmay=1.0, xnoise=None, ynoise=None, svectors=None,
+           verbose=False, _autoregressive=False):
 	"""Estimate time-varying state transition from observation matrix.
 	
 	Given a state-space model
@@ -196,57 +257,71 @@ def online(observations, hsensor, invhsensor, theta,
 		observations: matrix of observations, each row is an observation,
 		              as a numpy array.
 		hsensor: sensor stochastic model, as a function that takes
-		         x and y and returns a value proportional to p(y|x).
-		invhsensor: inverse of the sensor function, h^-1(y); equivalently
-		            solves argmax_x(p(x|y)).
+		         x and returns a noiseless y, y = h(x).
 		theta: (state transition function) transition function, as a
 		       function that takes f_t and f_{t+1} and calculates
 		       p(f_{t+1}|f_t). Both functions are represented by their
 		       mixing parameters.
+		invhsensor: inverse of the sensor function, h^-1(y); equivalently
+		            solves argmax_x(p(x|y)). If not specified, it will be
+		            solved using scipy's solve system.
 		kernel: Kernel object describing the domain of the estimation,
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
 		smcprior: state prior for the internal particle filter;
 		          if None, use a appropriately sized deterministic zero vector.
 		nsamples: number of samples to draw from the MCMC process.
+		sigmax: if xnoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		sigmay: if ynoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		xnoise: state transition known additive noise process W_t, as
+		        a function of the state.
+		ynoise: sensor known additive noise process W_t, as a function of
+		        the reference measurement and the measurement, P(y|y0),
+		        where the reference y0 corresponds to the noiseless operation
+		        on the known state, y0 = h(x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
-		snstd: if snoise is None, additive white gaussian noise will be
-		       used with this standard deviation. If both arguments are
-		       None, the process will present no noise. 
-		snoise: state transition known additive noise process W_t, as
-		        a function of the state.
-		verbose: if true, log every time a time step has been completed.
+		verbose: if true, log every time a sample is drawn.
+		_autoregressive: internal param. Do not use. Make the proposer
+		                 and transition evaluator autoregressive-aware.
 	Returns:
-		Tuple ([a_i], s, k) of mixing parameters, support vectors and kernel.
+		List of tuples, one per time step.
+		Each tuple ([a_i], [p_i], s, k) is ocmposed of mixing parameters,
+		likelihoods, support vectors and kernel.
 		The kernel defines the form of each component, with all
 		the required parameters set.
 		The list of support vectors s contains the components that span
 		a subspace where the estimation occurs. Each s_i is parametrized
-		in the given KernelSpace.
+		in the given Kernel space.
 		The samples a_i represent the probability distribution of the
 		state transition function f() where each a_i corresponds to
 		the mixing parameters describing a function of the form
 		f_i(x) = sum(a_ik * Kernel(s_k, x)).
+		For each sample, its corresponding likelihood is also saved.
 	"""
 	
-	if svectors is None:
-		(svectorsx, kernel) = _getsupportvectors(observations, invhsensor, kernel)
+	if not kernel.complete_params():
+		kernel.estimate_params([invhsensor(observation) for observation in observations])
 	
 	if not kernel.complete_params():
 		kernel.estimate_params(svectors)
 	
 	return [estimate for estimate in
 	           online_stream(observations=(row for row in observations),
-	              hsensor=hsensor, invhsensor=invhsensor, theta=theta,
+	              hsensor=hsensor, theta=theta, invhsensor=invhsensor,
                   kernel=kernel, smcprior=smcprior, nsamples=nsamples,
-                  snstd=snstd, snoise=snoise, svectors=svectors,
-                  verbose=verbose)]
+                  sigmax=sigmax, sigmay=sigmay, xnoise=xnoise, ynoise=ynoise,
+                  svectors=svectors, verbose=verbose,
+                  _autoregressive=_autoregressive)]
 
-def online_stream(observations, hsensor, invhsensor, theta,
-                  kernel=GaussianKernel(1.0), smcprior=None,
-                  nsamples=400, snstd=1.0, snoise=None,
-                  svectors=None, verbose=False):
+def online_stream(observations, hsensor, theta, invhsensor=None,
+                  kernel=GaussianKernel(1.0), smcprior=None,  nsamples=400,
+                  sigmax=1.0, sigmay=1.0, xnoise=None, ynoise=None,
+                  svectors=None, verbose=False, _autoregressive=False):
 	"""Estimate time-varying state transition from observation stream.
 	
 	Given a state-space model
@@ -262,60 +337,103 @@ def online_stream(observations, hsensor, invhsensor, theta,
 		observations: generator of observations, each entry is an observation,
 		              as a numpy array.
 		hsensor: sensor stochastic model, as a function that takes
-		         x and y and returns a value proportional to p(y|x).
-		invhsensor: inverse of the sensor function, h^-1(y); equivalently
-		            solves argmax_x(p(x|y)).
+		         x and returns a noiseless y, y = h(x).
 		theta: (state transition function) transition function, as a
 		       function that takes f_t and f_{t+1} and calculates
 		       p(f_{t+1}|f_t). Both functions are represented by their
 		       mixing parameters.
-		kernel: Kernel object describing the domain of the estimation;
-		        it must have all its parameters defined.
+		invhsensor: inverse of the sensor function, h^-1(y); equivalently
+		            solves argmax_x(p(x|y)). If not specified, it will be
+		            solved using scipy's solve system.
+		kernel: Kernel object describing the domain of the estimation,
+		        if it has incomplete parameters, they will be computed
+		        from the observations.
 		smcprior: state prior for the internal particle filter;
 		          if None, use a appropriately sized deterministic zero vector.
 		nsamples: number of samples to draw from the MCMC process.
+		sigmax: if xnoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		sigmay: if ynoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		xnoise: state transition known additive noise process W_t, as
+		        a function of the state.
+		ynoise: sensor known additive noise process W_t, as a function of
+		        the reference measurement and the measurement, P(y|y0),
+		        where the reference y0 corresponds to the noiseless operation
+		        on the known state, y0 = h(x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
-		snstd: if snoise is None, additive white gaussian noise will be
-		       used with this standard deviation. If both arguments are
-		       None, the process will present no noise. 
-		snoise: state transition known additive noise process W_t, as
-		        a function of the state.
-		verbose: if true, log every time a timestep has been completed.
+		verbose: if true, log every time a sample is drawn.
+		_autoregressive: internal param. Do not use. Make the proposer
+		                 and transition evaluator autoregressive-aware.
 	Returns:
-		Tuple ([a_i], s, k) of mixing parameters, support vectors and kernel.
+		List of tuples, one per time step.
+		Each tuple ([a_i], [p_i], s, k) is ocmposed of mixing parameters,
+		likelihoods, support vectors and kernel.
 		The kernel defines the form of each component, with all
 		the required parameters set.
 		The list of support vectors s contains the components that span
 		a subspace where the estimation occurs. Each s_i is parametrized
-		in the given KernelSpace.
+		in the given Kernel space.
 		The samples a_i represent the probability distribution of the
 		state transition function f() where each a_i corresponds to
 		the mixing parameters describing a function of the form
 		f_i(x) = sum(a_ik * Kernel(s_k, x)).
+		For each sample, its corresponding likelihood is also saved.
 	"""
+	
+	if invhsensor is None:
+		invhsensor = lambda y: scipy.optimize.solve(lambda x: hsensor(x) - y, y)
 	
 	observations     = iter(observations)
 	threshold        = 0.6 * kernel.deviation() 
 	firstobservation = next(observations)
 	firststate       = invhsensor(firstobservation)
 	
+	xsize = len(firststate)
+	ysize = len(firstobservation)
+	
 	if svectors is None:
 		prevlen  = 0
-		svectors = [firststate]
-		initial  = []
+		svectors = np.array([firststate])
+		initial  = np.zeros((len(firststate) if not _autoregressive else 1, 0))
 	else:
 		prevlen = len(svectors)
-		initial = np.zeros(len(svectors))
+		initial = np.zeros((len(firststate) if not _autoregressive else 1,
+		                    len(svectors)))
 	
-	if snoise is None:
-		if snstd is None:
-			snoise = lambda s: np.zeros(len(s))
+	if xnoise is None:
+		if sigmax is None:
+			xnoise = lambda s: np.zeros(len(s))
 		else:
-			snoise = lambda s: np.random.randn(len(s)) * snstd
+			xnoise = lambda s: np.dot(sigmax, np.random.randn(len(s)))
+	
+	if ynoise is None:
+		if sigmay is None:
+			psensor = lambda x0, y: 1.0 if np.abs(hsensor(x0) - y) < 1e-10 else 0.0
+		else:
+			if np.isscalar(sigmay):
+				sigmay = np.array([[sigmay]])
+			
+			cov        = sigmay.dot(sigmay.T)
+			coeff      = 1.0 / np.sqrt((2.0 * np.pi)**ysize * _pdet(cov))
+			infomatrix = np.linalg.pinv(cov)
+			expcoeff   = -0.5 * infomatrix
+			
+			def gnoise(x0, y):
+				dy = hsensor(x0) - y
+				return coeff * np.exp(np.dot(dy, np.dot(expcoeff, dy)))
+			
+			psensor = gnoise
+	else:
+		psensor = lambda x, y: ynoise(hsensor(x), y)
 	
 	if smcprior is None:
-		smcprior = lambda: np.zeros(len(firststate))
+		smcprior = lambda: firststate
+	
+	deviation = kernel.deviation()
 	
 	def proposer(sample, context):
 		svectors = context["svectors"]
@@ -330,39 +448,61 @@ def online_stream(observations, hsensor, invhsensor, theta,
 			coverage  = kernel.mixture_eval(sample, presvectors, prevstate)
 			
 			# mean = whatever is necessary to raise the transition function
-			# to predict this state from the previous one;
-			# NOTE in the current settings of this module, sample is
-			# one-dimensional, so mu is a scalar, hence the [0]
-			mu = state[0] - coverage
+			# to predict this state from the previous one
+			mu = state[:len(coverage)] - coverage
 			
-			return np.concatenate((prefix, [mu + np.random.randn() *
-			                                   kernel.deviation()]))
+			alpha = mu + np.dot(deviation, np.random.randn(len(mu)))
+			
+			return np.append(prefix, alpha[np.newaxis].T, axis=1)
 		else:
 			return sample + psigmas * np.random.randn(len(svectors))
 	
 	def thetactx(previous, sample, context):
 		if context["augment"]:
-			return theta(previous, sample[:-1])
+			return theta(previous, sample[:, :-1])
 		else:
 			return theta(previous, sample)
 	
-	def ftransitioner(sample, context):
-		svectors = context["svectors"]
-		
-		return lambda state: (kernel.mixture_eval(sample, svectors, state) +
-		                      snoise(state))
+	if not _autoregressive:
+		def ftransitioner(sample, context):
+			svectors = context["svectors"]
+			
+			return lambda state: (kernel.mixture_eval(sample, svectors, state) +
+			                      xnoise(state))
+	else:
+		def ftransitioner(sample, context):
+			svectors  = context["svectors"]
+			
+			def predict(state):
+				predicted = kernel.mixture_eval(sample, svectors, state)
+				# the time series is assumed one-dimensional, i.e. the state
+				# transition becomes [f(x_t), x_t, x_{t-1}, ...]
+				
+				pdelays = np.concatenate((predicted, state[:-1]))
+				
+				return pdelays + xnoise(pdelays)
+			
+			return predict
+	
+	if np.isscalar(deviation):
+		deviation = deviation * np.eye(initial.shape[0])
+	
+	propcov      = deviation.dot(deviation.T)
+	propcoeff    = 1.0 / (np.sqrt(2 * np.pi)**xsize * _pdet(propcov))
+	propinfo     = np.linalg.pinv(propcov)
+	propexpcoeff = -0.5 * propinfo
 	
 	def proppdf(previous, sample, context):
-		svectors = context["svectors"]
-		psigmas  = context["psigmas"]
-		sigma    = kernel.deviation()
+		svectors    = context["svectors"]
+		psigmas     = context["psigmas"]
+		ilogpsigmas = context["ilogpsigmas"]
 		
 		if context["augment"]:
 			# sample[:-1] will be copied from a random previous state
 			# so technically this should be multiplied by
 			# dirac(previous), but that doesn't change anything
 			# in practice (sample always comes from p(sample|previous)).
-			last = sample[-1]
+			last = sample[:, -1]
 			
 			presvectors = svectors[:-1]
 			
@@ -371,19 +511,22 @@ def online_stream(observations, hsensor, invhsensor, theta,
 			coverage  = kernel.mixture_eval(previous, presvectors, prevstate)
 			
 			# mean = whatever is necessary to raise the transition function
-			# to predict this state from the previous one;
-			# NOTE in the current settings of this module, sample is
-			# one-dimensional, so mu is a scalar, hence the [0]
-			mu = state[0] - coverage
+			# to predict this state from the previous one
+			mu = state[:len(coverage)] - coverage
 			
-			return 0.5 / sigma * np.exp(-0.5 *
-			                            (np.linalg.norm(last - mu) / sigma)**2)
+			delta = last - mu
+			
+			return propcoeff * np.exp(np.dot(delta, np.dot(propexpcoeff, delta)))
 		else:
-			distances = [np.linalg.norm(p - s) for (p, s) in zip(previous, sample)]
-			probs     = [0.5 / s * np.exp(-0.5 * (d/s)**2) for
-			                (d, s) in zip(distances, psigmas)]
+			delta = previous - sample
 			
-			return np.prod(probs)
+			logprobs = np.fromiter((ilogsig - 0.5 * 
+			                       np.dot(d, d) / sig**2 for
+			                       (d, sig, ilogsig) in
+			                           zip(delta.T, psigmas, ilogpsigmas)),
+			                       dtype=np.float, count=len(psigmas))
+			
+			return np.exp(np.sum(logprobs))
 	
 	sampler = RecursivePMCMC(initial          = initial,
 	                         prior            = lambda s: 1.0,
@@ -392,7 +535,7 @@ def online_stream(observations, hsensor, invhsensor, theta,
 	                         thetatransition  = thetactx,
 	                         smcprior         = smcprior,
 	                         ftransitioner    = ftransitioner,
-	                         hsensor          = hsensor,
+	                         hsensor          = psensor,
 	                         firstobservation = firstobservation,
 	                         nsamples         = 200)
 	
@@ -407,24 +550,142 @@ def online_stream(observations, hsensor, invhsensor, theta,
 		# (used for speeding up MCMC convergence)
 		sampler.context = {"svectors": svectors,
 		                   "augment":  prevlen < len(svectors),
-		                   "psigmas":  np.sqrt([hsensor(v, prevobservation) for
+		                   "psigmas":  np.sqrt([psensor(v, prevobservation) for
 		                                           v in svectors]),
 		                   "prevstate": invhsensor(prevobservation),
 		                   "state":     invhsensor(observation)}
 		
+		sampler.context["ilogpsigmas"] = np.log(1.0 / ((2 * np.pi)**len(svectors) * sampler.context["psigmas"]))
+		
 		sampler.add_observation(observation)
 		
-		samples         = [sampler.draw() for i in range(nsamples)]
+		samples     = np.empty((nsamples,
+		                        len(firststate) if not _autoregressive else 1,
+		                        len(svectors)))
+		likelihoods = np.empty(nsamples)
+		
+		for k in range(nsamples):
+			samples    [k, :, :] = sampler.draw()
+			likelihoods[k]       = sampler.likelihood
+		
+		if verbose:
+			print("time", i + 1)
+		
+		yield (samples, likelihoods, svectors, kernel)
+		
 		prevobservation = observation
 		prevlen         = len(svectors)
 		
 		svectors = _getsupportvectors_stream(observation, invhsensor,
 		                                     svectors, threshold)
+
+def autoregressive(observations, hsensor, theta, invhsensor=None, delays=1,
+                   kernel=GaussianKernel(), smcprior=None, nsamples=400,
+                   sigmax=1.0, sigmay=1.0, xnoise=None, ynoise=None,
+                   svectors=None, verbose=False):
+	"""Estimate time-varying state transition considering autoregressive terms.
+	
+	Given a state-space model
+	X_{t+1} = F_t(X_t) + W_t
+	Y_t     = h(X_t) + V_t,
+	where both the sensor function h() and a observations Y_{1:t} are known
+	and update and observation are corrupted with zero-mean noises W_t and V_t,
+	estimate the probability distribution of the state transition function f()
+	parametrized in the reproducing kernel hilbert space spanned by the
+	specified kernels.
+	In this model, X_t corresponds to several timesteps,
+	X_t = [x_t, x_{t-1}, ...]
+	and the transition function considers these delays
+	F_t(X_t) = [f_t(x_t), x_t, x_{t-1}, ...].
+	
+	Args:
+		observations: matrix of observations, each row is an observation,
+		              as a numpy array.
+		hsensor: sensor stochastic model, as a function that takes
+		         x and returns a noiseless y, y = h(x).
+		invhsensor: inverse of the sensor function, h^-1(y); equivalently
+		            solves argmax_x(p(x|y)). If not specified, it will be
+		            solved using scipy's solve system.
+		theta: (state transition function) transition function, as a
+		       function that takes f_t and f_{t+1} and calculates
+		       p(f_{t+1}|f_t). Both functions are represented by their
+		       mixing parameters.
+		delays: number of delays to consider, e.g. delays = 2 means
+		        X_t = [x_t, x_{t-1}, x_{t-2}].
+		kernel: Kernel object describing the domain of the estimation,
+		        if it has incomplete parameters, they will be computed
+		        from the observations.
+		smcprior: state prior for the internal particle filter;
+		          if None, use a appropriately sized deterministic zero vector.
+		nsamples: number of samples to draw from the MCMC process.
+		sigmax: if xnoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		sigmay: if ynoise is None, additive white gaussian noise will be
+		         used with this standard deviation. If both arguments are
+		         None, the process will present no noise. 
+		xnoise: state transition known additive noise process W_t, as
+		        a function of the state.
+		ynoise: sensor known additive noise process W_t, as a function of
+		        the reference measurement and the measurement, P(y|y0),
+		        where the reference y0 corresponds to the noiseless operation
+		        on the known state, y0 = h(x0).
+		svectors: if given, use these points as support vectors; otherwise,
+		          compute suitable ones from the observations.
+		verbose: if true, log every time a time step has been completed.
+	Returns:
+		List of tuples, one per time step.
+		Each tuple ([a_i], [p_i], s, k) is ocmposed of mixing parameters,
+		likelihoods, support vectors and kernel.
+		The kernel defines the form of each component, with all
+		the required parameters set.
+		The list of support vectors s contains the components that span
+		a subspace where the estimation occurs. Each s_i is parametrized
+		in the given Kernel space.
+		The samples a_i represent the probability distribution of the
+		state transition function f() where each a_i corresponds to
+		the mixing parameters describing a function of the form
+		f_i(x) = sum(a_ik * Kernel(s_k, x)).
+		For each sample, its corresponding likelihood is also saved.
+	"""
+	
+	if invhsensor is None:
+		invhsensor = lambda y: scipy.optimize.solve(lambda x: hsensor(x) - y, y)
+	
+	ydelays = np.empty((len(observations), delays + 1))
+	
+	ydelays[:, 0:1] = observations
+	zeros = np.zeros(delays)
+	
+	for i in range(1, delays + 1):
+		ydelays[:, i] = np.concatenate((zeros[:i], observations[:-i, 0]))
+	
+	invhsensor = np.vectorize(invhsensor)
+	vhsensor   = lambda x: hsensor(x[0])
+	vsmcprior  = lambda: np.concatenate((smcprior(), zeros))
+	vxnoise    = None
+	vynoise    = None
+	
+	if xnoise is not None:
+		vxnoise = lambda s: np.concatenate(xnoise(s), zeros)
+	if sigmax is not None:
+		sigmax0      = sigmax
+		sigmax       = np.zeros((delays + 1, delays + 1))
+		sigmax[0, 0] = sigmax0
 		
-		if verbose:
-			print("time", i + 1)
-		
-		yield (samples, svectors, kernel)
+	
+	if ynoise is not None:
+		vynoise = lambda s: np.concatenate(ynoise(s), zeros)
+	if sigmax is not None:
+		sigmay0      = sigmay
+		sigmay       = np.zeros((delays + 1, delays + 1))
+		sigmay[0, 0] = sigmay0
+	
+	return online(observations=ydelays, hsensor=vhsensor, theta=theta,
+	              invhsensor=invhsensor, kernel=kernel, smcprior=vsmcprior,
+	              nsamples=nsamples, sigmax=sigmax, sigmay=sigmay,
+	              xnoise=vxnoise, ynoise=vynoise, svectors=svectors,
+	              verbose=verbose, _autoregressive=True)
 
 def filter(ftransition, hsensor, sigmax, sigmay, x0, size):
 	"""Run a forward nonlinear filter with gaussian noise.
@@ -550,8 +811,8 @@ def _getsupportvectors(observations, invhsensor, kernel):
 	if not kernel.complete_params():
 		kernel.estimate_params([invhsensor(observation) for observation in observations])
 	
-	threshold = 0.6 * kernel.sigma
-	svectors  = []
+	threshold = 0.6 * kernel.deviation()
+	svectors  = np.zeros((0, len(invhsensor(observations[0]))))
 	
 	for observation in observations:
 		svectors = _getsupportvectors_stream(observation, invhsensor,
@@ -581,13 +842,14 @@ def _getsupportvectors_stream(observation, invhsensor, svectors, threshold):
 	
 	proposal = invhsensor(observation)
 	
-	mindistance = float("inf")
+	mindistance2 = float("inf")
 	
 	for svector in svectors:
-		mindistance = min(mindistance, np.linalg.norm(svector - proposal))
+		delta = svector - proposal
+		mindistance2 = min(mindistance2, np.dot(delta, delta))
 	
-	if mindistance > threshold:
-		svectors.append(proposal)
+	if mindistance2 > threshold * threshold:
+		svectors = np.concatenate((svectors, [proposal]))
 	
 	return svectors
 
@@ -607,9 +869,17 @@ def _diff2matrix(a, b):
 	
 	for (i, ai) in enumerate(a):
 		for (k, bk) in enumerate(b):
-			matrix[i, k] = np.linalg.norm(ai - bk)**2
+			delta        = ai - bk
+			matrix[i, k] = np.dot(delta, delta)
 	
 	return matrix
+
+def _pdet(x):
+	"""Pseudo-determinant calculation for symmetric matrices."""
+	
+	eigs, vecs = np.linalg.eigh(x)
+	
+	return np.prod([eigval for eigval in eigs if eigval > 1e-10])
 
 def test():
 	f  = lambda x: 10 * np.sinc(x / 7)
@@ -623,7 +893,7 @@ def test():
 	(x, y) = filter(f, h, sigmax, sigmay, x0, size)
 	
 	(samples, svectors, kernel) = offline(observations = y[np.newaxis].T,
-	                                      hsensor      = lambda x, y: 0.5 / sigmay * np.exp(-0.5 * (np.linalg.norm(x - y) / sigmay)**2),
+	                                      hsensor      = lambda x, y: 0.5 / sigmay * np.exp(-0.5 * np.dot(x - y, x - y) / sigmay**2),
 	                                      invhsensor   = lambda y: y,
 	                                      kernel       = GaussianKernel(),
 	                                      nsamples     = 5,
@@ -701,10 +971,10 @@ def test2():
 	
 	estimate = online(observations = yt[np.newaxis].T,
 	                  hsensor      = lambda x, y: 0.5 / sigmayt *
-	                                              np.exp(-0.5 * (np.linalg.norm((x / 2 + 5) - y)/sigmayt)**2),
+	                                              np.exp(-0.5 * np.dot((x / 2 + 5) - y, (x / 2 + 5) - y)/sigmayt**2),
 	                  invhsensor   = lambda y: 2 * (y - 5),
 	                  theta        = lambda f1, f2: 0.5 / sigmaf *
-	                                                np.exp(-0.5 * (np.linalg.norm(f1 - f2)/sigmaf)**2),
+	                                                np.exp(-0.5 * np.dot(f1 - f2, f1 - f2) / sigmaf**2),
 	                  kernel       = GaussianKernel(),
 	                  nsamples     = 400,
 	                  snstd        = sigmaxt,

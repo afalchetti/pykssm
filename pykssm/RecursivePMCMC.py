@@ -108,6 +108,9 @@ class RecursivePMCMC(MCMC):
 		self._filters     = [initfilter]
 		self._prevfilters = []
 		
+		# hastings factor top component
+		self._prevq = 1.0
+		
 		initfilter.get_likelihood()
 		
 		super().__init__(observations=[self._observation],
@@ -140,6 +143,7 @@ class RecursivePMCMC(MCMC):
 		self._samples     = []
 		self._filters     = []
 		self._observation = observation
+		self._prevq       = 1.0
 		
 		# generate a new sample and immediately accept it;
 		# samples should only be compared inside the same time step
@@ -192,14 +196,19 @@ class RecursivePMCMC(MCMC):
 		#           = 1/N * sum(p(x' | x_{t-1}^i));
 		# the constant cancels on the division.
 		
-		sample   = sample  [0]
-		previous = previous[0]
+		sample = sample[0]
 		
-		top    = np.sum(self._proppdf(prev, previous, self._context)
-		                    for prev in self._prevsamples)
+		# for efficiency reasons, previous is disregarded and it is assumed
+		# to be the last drawn sample
 		
+		#top    = np.sum(self._proppdf(prev, previous, self._context)
+		#                    for prev in self._prevsamples)
+		
+		top    = self._prevq
 		bottom = np.sum(self._proppdf(prev, sample, self._context)
 		                    for prev in self._prevsamples)
+		
+		self._prevq = bottom
 		
 		return top / bottom
 	

@@ -141,13 +141,13 @@ class SMC(object):
 		
 		# particles are public using the draw() method, so
 		# the original ones should be preserved untouched
-		particles = copy.copy(self._samples)
-		weights   = [1.0 / self._nsamples] * self._nsamples
+		particles = np.copy(self._samples)
+		weights   = np.tile(np.array([1.0 / self._nsamples]), self._nsamples)
 		
 		(particles, weights, like) = (
 		    self._filter(particles, weights, observation))
 		
-		(self._samples, weights) = self._resample(particles, weights)
+		(self._samples, weights) = self._resample(particles, weights, self._nsamples)
 		
 		return like
 	
@@ -174,12 +174,12 @@ class SMC(object):
 		weights            = self._measure(particles, weights, next(observations))
 		like               = np.sum(weights)
 		loglikelihood     += np.log(like)
-		particles, weights = self._resample(particles, weights)
+		particles, weights = self._resample(particles, weights, self._nsamples)
 		
 		for observation in observations:
 			(particles, weights, like) = self._filter(particles, weights, observation)
 			loglikelihood             += np.log(like)
-			particles, weights         = self._resample(particles, weights)
+			particles, weights         = self._resample(particles, weights, self._nsamples)
 		
 		return (particles, np.exp(loglikelihood))
 	
@@ -196,13 +196,13 @@ class SMC(object):
 		"""
 		
 		invlen    = 1.0 / self._nsamples
-		particles = [self._prior() for i in range(self._nsamples)]
-		weights   = [invlen] * self._nsamples
+		particles = np.array([self._prior() for i in range(self._nsamples)])
+		weights   = np.tile(np.array([invlen]), self._nsamples)
 		
 		return (particles, weights)
 	
 	@staticmethod
-	def _resample(particles, weights):
+	def _resample(particles, weights, n):
 		"""Sample a new set of particles with equal weights.
 		
 		As the filtering moves along, some particles get stuck representing
@@ -232,10 +232,8 @@ class SMC(object):
 			Updated particles.
 		"""
 		
-		n = len(weights)
-		
 		invlen       = 1.0 / n
-		newparticles = [None for i in range(n)]
+		newparticles = np.empty(particles.shape)
 		newweights   = _normalize(weights)
 		rand         = np.random.random_sample() * invlen
 		
@@ -244,6 +242,7 @@ class SMC(object):
 			while rand >= 0 and k < n:
 				rand -= weights[k]
 				k    += 1
+				
 			newparticles[i] = particles[k - 1]
 			newweights  [i] = invlen
 			rand           += invlen
@@ -264,8 +263,14 @@ class SMC(object):
 			of the filter step p(y_t|y_{1:t-1}).
 		"""
 		
-		particles = self._predict(particles)
-		weights   = self._measure(particles, weights, observation)
+		# particles = self._predict(particles)
+		# weights   = self._measure(particles, weights, observation)
+		# inlined for speed (this is a tight loop)
+		particles = np.array([self._ftransition(p) for p in particles])
+		weights   = np.fromiter((weight * self._hsensor(particle, observation)
+		                             for (weight, particle) in zip(weights,
+		                                                           particles)),
+		                        dtype=np.float, count=len(weights))
 		
 		# NOTE it is important that the predicted weights be normalized
 		#      so the sum after the measurement, sum(w * p(y_t|x_t)),
@@ -286,9 +291,7 @@ class SMC(object):
 			Updated particles.
 		"""
 		
-		particles[:] = [self._ftransition(particle) for particle in particles]
-		
-		return particles
+		return np.array([self._ftransition(p) for p in particles])
 	
 	def _measure(self, particles, weights, measurement):
 		"""Measurement step of the filter.
@@ -307,10 +310,8 @@ class SMC(object):
 			Updated particles.
 		"""
 		
-		weights[:] = [weight * self._hsensor(particle, measurement)
-		                 for (weight, particle) in zip(weights, particles)]
-		
-		return weights
+		return np.array([weight * self._hsensor(particle, measurement)
+		                 for (weight, particle) in zip(weights, particles)])
 
 def _normalize(vector):
 	"Get a normalized version of a vector whose components sum to one."

@@ -77,6 +77,12 @@ class MCMC(object):
 		
 		return self._accepted / self._total
 	
+	@property
+	def likelihood(self):
+		"Likelihood of the last sample."
+		
+		return self._slike
+	
 	@staticmethod
 	def _uniform_likelihood(sample):
 		"Uniform likelihood function."
@@ -148,18 +154,11 @@ class MCMC(object):
 		if rand < min(1.0, ratio):
 			accepted = True
 		
-		#print("hf:", self._hastingsfactor(proposal, self._sample))
-		#print("like:", like)
-		#print("prevlike:", self._slike)
-		
 		if accepted:
 			self._sample    = proposal
 			self._slike     = like
 			self._accepted += 1
 		
 		self._total += 1
-		
-		#acceptstr = "accepted" if accepted else "rejected"
-		#print(acceptstr, "| like:", like, "| ratio:", ratio, "| sample:", proposal[0], "| R:", self.ratio)
 		
 		return self._sample
