@@ -48,7 +48,7 @@ def offline(observations, hsensor, invhsensor=None, kernel=GaussianKernel(),
 	Given a state-space model
 	X_{t+1} = f(X_t) + W_t
 	Y_t     = h(X_t) + V_t,
-	where both the sensor function h() and a observations Y_{1:t} are known
+	where both the sensor function h() and observations Y_{1:t} are known
 	and update and observation are corrupted with zero-mean noises W_t and V_t,
 	estimate the probability distribution of the state transition function f()
 	parametrized in the reproducing kernel hilbert space spanned by the
@@ -66,7 +66,7 @@ def offline(observations, hsensor, invhsensor=None, kernel=GaussianKernel(),
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
 		smcprior: state prior for the internal particle filter;
-		          if None, use a appropriately sized deterministic zero vector.
+		          if None, use an estimate from the first observation.
 		nsamples: number of samples to draw from the MCMC process.
 		sigmax: if xnoise is None, additive white gaussian noise will be
 		         used with this standard deviation. If both arguments are
@@ -77,9 +77,7 @@ def offline(observations, hsensor, invhsensor=None, kernel=GaussianKernel(),
 		xnoise: state transition known additive noise process W_t, as
 		        a function of the state.
 		ynoise: sensor known additive noise process W_t, as a function of
-		        the reference measurement and the measurement, P(y|y0),
-		        where the reference y0 corresponds to the noiseless operation
-		        on the known state, y0 = h(x0).
+		        the reference state and the measurement, P(y|x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
 		verbose: if true, log every time a sample is drawn.
@@ -167,6 +165,7 @@ def offline(observations, hsensor, invhsensor=None, kernel=GaussianKernel(),
 	for i in range(nsamples):
 		if verbose:
 			print("sample", i + 1, "| ratio:", sampler.ratio)
+		
 		samples    [i, :, :] = sampler.draw()
 		likelihoods[i]       = sampler.likelihood
 	
@@ -181,7 +180,7 @@ def offline_stream(observations, hsensor, invhsensor=None,
 	Given a state-space model
 	X_{t+1} = f(X_t) + W_t
 	Y_t     = h(X_t) + V_t,
-	where both the sensor function h() and a observations Y_{1:t} are known
+	where both the sensor function h() and observations Y_{1:t} are known
 	and update and observation are corrupted with zero-mean noises W_t and V_t,
 	estimate the probability distribution of the state transition function f()
 	parametrized in the reproducing kernel hilbert space spanned by the
@@ -199,7 +198,7 @@ def offline_stream(observations, hsensor, invhsensor=None,
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
 		smcprior: state prior for the internal particle filter;
-		          if None, use a appropriately sized deterministic zero vector.
+		          if None, use an estimate from the first observation.
 		nsamples: number of samples to draw from the MCMC process.
 		sigmax: if xnoise is None, additive white gaussian noise will be
 		         used with this standard deviation. If both arguments are
@@ -210,9 +209,7 @@ def offline_stream(observations, hsensor, invhsensor=None,
 		xnoise: state transition known additive noise process W_t, as
 		        a function of the state.
 		ynoise: sensor known additive noise process W_t, as a function of
-		        the reference measurement and the measurement, P(y|y0),
-		        where the reference y0 corresponds to the noiseless operation
-		        on the known state, y0 = h(x0).
+		        the reference state and the measurement, P(y|x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
 		verbose: if true, log every time a sample is drawn.
@@ -247,9 +244,9 @@ def online(observations, hsensor, theta, invhsensor=None,
 	Given a state-space model
 	X_{t+1} = f_t(X_t) + W_t
 	Y_t     = h(X_t) + V_t,
-	where both the sensor function h() and a observations Y_{1:t} are known
+	where both the sensor function h() and observations Y_{1:t} are known
 	and update and observation are corrupted with zero-mean noises W_t and V_t,
-	estimate the probability distribution of the state transition function f()
+	estimate the probability distribution of the state transition function f_t()
 	parametrized in the reproducing kernel hilbert space spanned by the
 	specified kernels.
 	
@@ -269,7 +266,7 @@ def online(observations, hsensor, theta, invhsensor=None,
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
 		smcprior: state prior for the internal particle filter;
-		          if None, use a appropriately sized deterministic zero vector.
+		          if None, use an estimate from the first observation.
 		nsamples: number of samples to draw from the MCMC process.
 		sigmax: if xnoise is None, additive white gaussian noise will be
 		         used with this standard deviation. If both arguments are
@@ -280,9 +277,7 @@ def online(observations, hsensor, theta, invhsensor=None,
 		xnoise: state transition known additive noise process W_t, as
 		        a function of the state.
 		ynoise: sensor known additive noise process W_t, as a function of
-		        the reference measurement and the measurement, P(y|y0),
-		        where the reference y0 corresponds to the noiseless operation
-		        on the known state, y0 = h(x0).
+		        the reference state and the measurement, P(y|x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
 		verbose: if true, log every time a sample is drawn.
@@ -290,7 +285,7 @@ def online(observations, hsensor, theta, invhsensor=None,
 		                 and transition evaluator autoregressive-aware.
 	Returns:
 		List of tuples, one per time step.
-		Each tuple ([a_i], [p_i], s, k) is ocmposed of mixing parameters,
+		Each tuple ([a_i], [p_i], s, k) is composed of mixing parameters,
 		likelihoods, support vectors and kernel.
 		The kernel defines the form of each component, with all
 		the required parameters set.
@@ -327,9 +322,9 @@ def online_stream(observations, hsensor, theta, invhsensor=None,
 	Given a state-space model
 	X_{t+1} = f_t(X_t) + W_t
 	Y_t     = h(X_t) + V_t,
-	where both the sensor function h() and a observations Y_{1:t} are known
+	where both the sensor function h() and observations Y_{1:t} are known
 	and update and observation are corrupted with zero-mean noises W_t and V_t,
-	estimate the probability distribution of the state transition function f()
+	estimate the probability distribution of the state transition function f_t()
 	parametrized in the reproducing kernel hilbert space spanned by the
 	specified kernels.
 	
@@ -349,7 +344,7 @@ def online_stream(observations, hsensor, theta, invhsensor=None,
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
 		smcprior: state prior for the internal particle filter;
-		          if None, use a appropriately sized deterministic zero vector.
+		          if None, use an estimate from the first observation.
 		nsamples: number of samples to draw from the MCMC process.
 		sigmax: if xnoise is None, additive white gaussian noise will be
 		         used with this standard deviation. If both arguments are
@@ -360,9 +355,7 @@ def online_stream(observations, hsensor, theta, invhsensor=None,
 		xnoise: state transition known additive noise process W_t, as
 		        a function of the state.
 		ynoise: sensor known additive noise process W_t, as a function of
-		        the reference measurement and the measurement, P(y|y0),
-		        where the reference y0 corresponds to the noiseless operation
-		        on the known state, y0 = h(x0).
+		        the reference state and the measurement, P(y|x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
 		verbose: if true, log every time a sample is drawn.
@@ -370,7 +363,7 @@ def online_stream(observations, hsensor, theta, invhsensor=None,
 		                 and transition evaluator autoregressive-aware.
 	Returns:
 		List of tuples, one per time step.
-		Each tuple ([a_i], [p_i], s, k) is ocmposed of mixing parameters,
+		Each tuple ([a_i], [p_i], s, k) is composed of mixing parameters,
 		likelihoods, support vectors and kernel.
 		The kernel defines the form of each component, with all
 		the required parameters set.
@@ -588,7 +581,7 @@ def autoregressive(observations, hsensor, theta, invhsensor=None, delays=1,
 	Given a state-space model
 	X_{t+1} = F_t(X_t) + W_t
 	Y_t     = h(X_t) + V_t,
-	where both the sensor function h() and a observations Y_{1:t} are known
+	where both the sensor function h() and observations Y_{1:t} are known
 	and update and observation are corrupted with zero-mean noises W_t and V_t,
 	estimate the probability distribution of the state transition function f()
 	parametrized in the reproducing kernel hilbert space spanned by the
@@ -616,7 +609,7 @@ def autoregressive(observations, hsensor, theta, invhsensor=None, delays=1,
 		        if it has incomplete parameters, they will be computed
 		        from the observations.
 		smcprior: state prior for the internal particle filter;
-		          if None, use a appropriately sized deterministic zero vector.
+		          if None, use an estimate from the first observation.
 		nsamples: number of samples to draw from the MCMC process.
 		sigmax: if xnoise is None, additive white gaussian noise will be
 		         used with this standard deviation. If both arguments are
@@ -627,15 +620,13 @@ def autoregressive(observations, hsensor, theta, invhsensor=None, delays=1,
 		xnoise: state transition known additive noise process W_t, as
 		        a function of the state.
 		ynoise: sensor known additive noise process W_t, as a function of
-		        the reference measurement and the measurement, P(y|y0),
-		        where the reference y0 corresponds to the noiseless operation
-		        on the known state, y0 = h(x0).
+		        the reference state and the measurement, P(y|x0).
 		svectors: if given, use these points as support vectors; otherwise,
 		          compute suitable ones from the observations.
 		verbose: if true, log every time a time step has been completed.
 	Returns:
 		List of tuples, one per time step.
-		Each tuple ([a_i], [p_i], s, k) is ocmposed of mixing parameters,
+		Each tuple ([a_i], [p_i], s, k) is composed of mixing parameters,
 		likelihoods, support vectors and kernel.
 		The kernel defines the form of each component, with all
 		the required parameters set.
@@ -672,7 +663,6 @@ def autoregressive(observations, hsensor, theta, invhsensor=None, delays=1,
 		sigmax0      = sigmax
 		sigmax       = np.zeros((delays + 1, delays + 1))
 		sigmax[0, 0] = sigmax0
-		
 	
 	if ynoise is not None:
 		vynoise = lambda s: np.concatenate(ynoise(s), zeros)
@@ -748,11 +738,11 @@ def kls(x, y, svectors, kernel, regularization):
 	representing the function f as a kernel mix, in the space spanned
 	by the support vectors,
 	f(x) = sum(a_i * k(s_i, x)),
-	where {s}_i correspond to the spport vectors and |f|_K is the norm
+	where {s}_i correspond to the support vectors and |f|_K is the norm
 	induced by the kernel.
 	
 	The first term reduces the error in predicting y from x, while
-	the second one ensures f is appropiately smooth.
+	the second one ensures f is appropriately smooth.
 	
 	Args:
 		x: list of the x axis component for each known point.
@@ -762,7 +752,7 @@ def kls(x, y, svectors, kernel, regularization):
 		regularization: Tikhonov regularization factor
 		                (lambda in the expression above).
 	Notes:
-		Assumes symmetric kernel k(x, y) = k(y, x)
+		Assumes symmetric kernel k(x, y) = k(y, x).
 	Returns:
 		Mixing parameters for the support vectors that approximate
 		the function y = f(x).
@@ -880,105 +870,3 @@ def _pdet(x):
 	eigs, vecs = np.linalg.eigh(x)
 	
 	return np.prod([eigval for eigval in eigs if eigval > 1e-10])
-
-def test():
-	f  = lambda x: 10 * np.sinc(x / 7)
-	h  = lambda x: x
-	x0 = 0 + np.random.randn() * 10
-
-	sigmax = 2
-	sigmay = 2
-	size   = 40
-
-	(x, y) = filter(f, h, sigmax, sigmay, x0, size)
-	
-	(samples, svectors, kernel) = offline(observations = y[np.newaxis].T,
-	                                      hsensor      = lambda x, y: 0.5 / sigmay * np.exp(-0.5 * np.dot(x - y, x - y) / sigmay**2),
-	                                      invhsensor   = lambda y: y,
-	                                      kernel       = GaussianKernel(),
-	                                      nsamples     = 5,
-	                                      snstd        = sigmax)
-	
-	limit = 10.0 * np.ceil(1/10.0 *2.0 * max(abs(min(x)), abs(max(x))))
-	grid  = np.arange(-limit, limit, 2)
-	
-	smean = np.mean(np.array(samples), 0)
-	svar  = np.var(np.array(samples), 0)
-	
-	print("samples:", samples)
-	print("s:", np.array(samples))
-	print("mean:", smean)
-	print("svar:", svar)
-	
-	# Real transition function
-	real  = [f(i) for i in grid]
-	
-	# Mean estimate and its marginal deviation (note that
-	# since support vectors are constants and the mixture
-	# is a linear combination, the variance just requires
-	# evaluating the mixture with the weight variances)
-	estmean = np.array([kernel.mixture_eval(smean, svectors, [i]) for i in grid])
-	estvar  = np.array([kernel.mixture_eval(svar,  svectors, [i]) for i in grid])
-	eststd  = np.sqrt(estvar)
-	
-	like = []
-
-	for sample in samples:
-		filt  = SMC(observations = y[np.newaxis].T,
-		            prior        = lambda: 0 + np.random.randn() * 10,
-		            ftransition  = lambda x: kernel.mixture_eval(sample, svectors, x) + np.random.randn() * sigmax,
-		            hsensor      = lambda x, y: 0.5/sigmay * np.exp(-((x - y)/sigmay)**2),
-		            nsamples     = 50)
-		
-		like.append(filt.get_likelihood())
-
-def test2():
-	# Time-varying model
-	def ft(t, x):
-		# time-invariant stable 
-		def flow(x):
-			return x / 2 + 25 * x / (1 + x * x)
-		
-		# time-invariant unstable (two accumulation points)
-		def fhigh(x):
-			return 10 * np.sinc(x / 7)
-		
-		# linear interpolation between the previous two
-		def fmid(t, x):
-			return (60 - t) / 30 * flow(x) + (t - 30) / 30 * fhigh(x)
-		
-		if t < 30:
-			return flow(x)
-		elif t > 60:
-			return fhigh(x)
-		else:
-			return fmid(t, x)
-	
-	ht = lambda x: x / 2 + 5
-	
-	sigmaxt0 = 1
-	sigmaxt  = 1
-	sigmayt  = np.sqrt(0.5)
-	sizet    = 90
-	
-	xt0 = 0 + np.random.randn() * sigmaxt0
-	
-	(xt, yt) = filter_t(ft, ht, sigmaxt, sigmayt, xt0, sizet)
-	
-	# Time-varying KSSM, the core of this notebook
-	# (state transition function) transition standard deviation
-	sigmaf = 0.2
-	
-	estimate = online(observations = yt[np.newaxis].T,
-	                  hsensor      = lambda x, y: 0.5 / sigmayt *
-	                                              np.exp(-0.5 * np.dot((x / 2 + 5) - y, (x / 2 + 5) - y)/sigmayt**2),
-	                  invhsensor   = lambda y: 2 * (y - 5),
-	                  theta        = lambda f1, f2: 0.5 / sigmaf *
-	                                                np.exp(-0.5 * np.dot(f1 - f2, f1 - f2) / sigmaf**2),
-	                  kernel       = GaussianKernel(),
-	                  nsamples     = 400,
-	                  snstd        = sigmaxt,
-	                  smcprior     = lambda: np.array([0 + np.random.randn() * sigmaxt0]),
-	                  verbose      = True)
-	# estimate is an array of tuples of the form (samples, svectors, kernel), each one corresponding
-	# to a time step and similar to the offline case.

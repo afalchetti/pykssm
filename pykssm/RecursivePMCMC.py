@@ -86,7 +86,7 @@ class RecursivePMCMC(MCMC):
 			The difference between thetatransition and ftransitioner is that
 			the first models the transition between the sampled variable
 			in time, while the second models the transition between states
-			in the internal particle filter (in the same time).
+			in the internal particle filter (also in time).
 		"""
 		
 		self._observation     = firstobservation
@@ -201,8 +201,8 @@ class RecursivePMCMC(MCMC):
 		# for efficiency reasons, previous is disregarded and it is assumed
 		# to be the last drawn sample
 		
-		#top    = np.sum(self._proppdf(prev, previous, self._context)
-		#                    for prev in self._prevsamples)
+		# top    = np.sum(self._proppdf(prev, previous, self._context)
+		#                     for prev in self._prevsamples)
 		
 		top    = self._prevq
 		bottom = np.sum(self._proppdf(prev, sample, self._context)

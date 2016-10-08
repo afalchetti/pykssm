@@ -219,7 +219,7 @@ class SMC(object):
 			Naively sampling from the distribution may once in a while give
 			very bad results (sampling 1000 bad particles, although improbable,
 			is possible), so the stochastic universal sampling algorithm is
-			used instead. The unity interval [0, 1) is divided in segments
+			used instead. The unity interval [0, 1) is divided into segments
 			according to the normalized weights. Then, from a random first
 			value chosen in [0, 1/N), all N new particles are sampled by moving
 			in fixed 1/N steps inside the unity interval.

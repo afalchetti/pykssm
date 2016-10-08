@@ -52,7 +52,7 @@ class MCMC(object):
 			initial: initial sample for the chain.
 			proposer: proposal function sampler; given the current sample
 			          as argument, propose a new sample.
-			likelihood: function that takes a sample and isproportional to
+			likelihood: function that takes a sample and is proportional to
 			            the posterior distribution to be sampled.
 			hfactor: hastings factor which measures the asymmetry 
 			         of the proposal distribution following the formula
@@ -86,6 +86,7 @@ class MCMC(object):
 	@staticmethod
 	def _uniform_likelihood(sample):
 		"Uniform likelihood function."
+		
 		return 1.0
 	
 	@staticmethod
@@ -149,7 +150,8 @@ class MCMC(object):
 			ratio = like / self._slike * self._hastingsfactor(proposal, self._sample)
 		else:
 			ratio = 1
-		rand  = np.random.random_sample()
+			
+		rand = np.random.random_sample()
 		
 		if rand < min(1.0, ratio):
 			accepted = True

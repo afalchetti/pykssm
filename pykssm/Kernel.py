@@ -86,7 +86,7 @@ class Kernel(object):
 		return matrix
 	
 	def deviation(self):
-		"Estimate a step size for MCMC given the parameters of the kernel"
+		"Estimate a step size for MCMC given the parameters of the kernel."
 		
 		raise NotImplementedError
 	
