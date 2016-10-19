@@ -154,7 +154,7 @@ def offline(observations, hsensor, invhsensor=None, kernel=GaussianKernel(),
 		return prop
 
 	sampler = PMCMC(observations,
-	                initial       = np.zeros((xsize, vsize)),
+	                initial       = kls(observations[:-1],observations[1:],svectors, kernel,0),
 	                prior         = lambda s: 1.0,
 	                proposer      = proposer,
 	                smcprior      = smcprior,

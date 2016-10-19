@@ -143,6 +143,9 @@ class MCMC(object):
 
 		accepted = False
 
+		if self._slike <= 0:
+			print(self._sample)
+
 		proposal = self._propose(self._sample)
 		like     = self._get_likelihood(proposal)
 
